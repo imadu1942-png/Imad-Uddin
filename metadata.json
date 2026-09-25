@@ -1,0 +1,6 @@
+{
+  "name": "আশেকানে গাউছিয়া - আর্থিক হিসাব ব্যবস্থাপনা",
+  "description": "আশেকানে গাউছিয়া ইসলামিক সংগঠনের হাদিয়া, মাহফিল ও আয়-ব্যয়ের মোবাইল-ফার্স্ট ডিজিটাল হিসাবরক্ষণ ব্যবস্থা।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
