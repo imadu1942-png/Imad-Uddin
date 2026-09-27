@@ -16,11 +16,7 @@ export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError('অনুগ্রহ করে আপনার নাম লিখুন।');
-      return;
-    }
+    const trimmed = name.trim() || 'সম্মানিত অতিথি';
     setError('');
     onEnterAsGuest(trimmed);
   };
@@ -34,8 +30,8 @@ export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
       <div className="w-full max-w-md mx-auto">
         {/* Brand Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-800/40 border border-emerald-500/30 text-emerald-400 mb-4 shadow-xl shadow-emerald-950/60 backdrop-blur-xs">
-            <IslamicDomeLogo className="w-9 h-9 text-emerald-400" />
+          <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-black border-2 border-emerald-500/40 p-1 mb-4 shadow-xl shadow-emerald-950/60 overflow-hidden">
+            <IslamicDomeLogo className="w-full h-full object-contain" />
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
             আশেকানে গাউছিয়া

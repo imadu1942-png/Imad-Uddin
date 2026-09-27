@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { databaseService, FilterOptions } from '../services/databaseService';
+import { databaseService, computeDashboardStats } from '../services/databaseService';
 import { Donation, Expense, Mahfil, Member, DashboardStats } from '../types/database.types';
 
-export function useFinancialData() {
+interface UseFinancialDataOptions {
+  isAuthLoading?: boolean;
+  userId?: string | null;
+  isPublicGuest?: boolean;
+}
+
+export function useFinancialData(options?: UseFinancialDataOptions) {
   const [donations, setDonations] = useState<Donation[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [mahfils, setMahfils] = useState<Mahfil[]>([]);
@@ -13,6 +19,10 @@ export function useFinancialData() {
   const [error, setError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
+  const isAuthLoading = options?.isAuthLoading ?? false;
+  const userId = options?.userId;
+  const isPublicGuest = options?.isPublicGuest ?? false;
+
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setNotification({ message, type });
     setTimeout(() => {
@@ -22,34 +32,55 @@ export function useFinancialData() {
 
   const clearNotification = () => setNotification(null);
 
-  // Load all foundational records
+  // Load all foundational records directly from Supabase (Authenticated Admin/Cashier only)
   const refreshAll = useCallback(async () => {
+    if (!userId) {
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
     setIsLoading(true);
     setError(null);
+    setDashboardStats(null);
     try {
-      const [dList, eList, mList, memList, stats] = await Promise.all([
+      const [dList, eList, mList, memList] = await Promise.all([
         databaseService.getDonations(),
         databaseService.getExpenses(),
         databaseService.getMahfils(),
         databaseService.getMembers(),
-        databaseService.getDashboardStats(),
       ]);
+
+      // Calculate totals immediately and directly from freshly returned database records
+      const stats = computeDashboardStats(dList, eList, mList);
+
       setDonations(dList);
       setExpenses(eList);
       setMahfils(mList);
       setMembers(memList);
       setDashboardStats(stats);
+      setError(null);
     } catch (err: any) {
-      console.error('Data load error:', err);
-      setError(err?.message || 'তথ্য লোড করতে সমস্যা হয়েছে');
+      console.error('Data load error from Supabase:', err);
+      const errMsg = err?.message || 'হিসাব লোড করা যাচ্ছে না। আবার চেষ্টা করুন।';
+      setError(errMsg);
+      setDashboardStats(null);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [userId]);
 
+  // Fetch when auth session has finished loading and user is logged in
   useEffect(() => {
-    refreshAll();
-  }, [refreshAll]);
+    // If Supabase Auth is still resolving the initial session, wait before sending protected queries
+    if (isAuthLoading) {
+      return;
+    }
+    if (userId) {
+      refreshAll();
+    } else {
+      setIsLoading(false);
+    }
+  }, [isAuthLoading, userId, refreshAll]);
 
   // Donation mutations
   const addDonation = async (data: Omit<Donation, 'id' | 'createdAt'>) => {

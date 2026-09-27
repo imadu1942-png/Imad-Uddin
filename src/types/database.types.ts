@@ -88,3 +88,39 @@ export interface DashboardStats {
   recentExpenses: Expense[];
   recentMahfils: Mahfil[];
 }
+
+export interface PublicSummary {
+  member_count: number;
+  current_month: {
+    income: number;
+    expense: number;
+    balance: number;
+  };
+  current_year: {
+    income: number;
+    expense: number;
+    balance: number;
+  };
+  upcoming_mahfils: Array<{
+    id: string | number;
+    name: string;
+    event_date: string;
+    location: string;
+    description?: string | null;
+  }>;
+  mahfil_summary: Array<{
+    id: string | number;
+    name: string;
+    event_date: string;
+    location: string;
+    income: number;
+    expense: number;
+    balance: number;
+  }>;
+  yearly_monthly_summary: Array<{
+    month: number;
+    income: number;
+    expense: number;
+    balance: number;
+  }>;
+}

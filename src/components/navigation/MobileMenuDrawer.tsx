@@ -20,7 +20,13 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
   if (!isOpen) return null;
 
   const visibleItems = isPublicGuest
-    ? navItems.filter((i) => i.key !== 'settings')
+    ? [
+        {
+          key: 'dashboard' as NavItemKey,
+          label: 'পাবলিক হিসাব',
+          icon: <span className="w-5 h-5 flex items-center justify-center font-bold">আ</span>,
+        },
+      ]
     : navItems;
 
   return (

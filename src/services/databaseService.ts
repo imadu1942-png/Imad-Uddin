@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { Donation, Expense, Mahfil, Member, DashboardStats } from '../types/database.types';
+import { Donation, Expense, Mahfil, Member, DashboardStats, PublicSummary } from '../types/database.types';
 
 export interface FilterOptions {
   search?: string;
@@ -26,27 +26,95 @@ async function getCurrentUserId(): Promise<string | null> {
 // Bengali error message translator
 export function translateErrorMessage(error: any): string {
   if (!error) return 'একটি অজানা ত্রুটি ঘটেছে';
-  const msg = typeof error === 'string' ? error : error.message || '';
+  const rawMsg = typeof error === 'string'
+    ? error
+    : [error.message, error.details, error.hint, error.code ? `[কোড: ${error.code}]` : ''].filter(Boolean).join(' | ');
   
-  if (msg.includes('row-level security') || msg.includes('violates row-level security')) {
-    return 'আপনার এই কাজটি করার পারমিশন নেই (অনুমতি সংরক্ষিত)';
+  const msg = rawMsg || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+  
+  if (msg.includes('row-level security') || msg.includes('violates row-level security') || msg.includes('permission denied')) {
+    return `অনুমতি ত্রুটি (RLS): আপনার এক্সেস সংরক্ষিত বা পলিসি অনুমতি নেই (${msg})`;
   }
   if (msg.includes('JWT') || msg.includes('auth') || msg.includes('not authenticated')) {
-    return 'লগইন সেশন শেষ হয়ে গেছে, অনুগ্রহ করে পুনরায় লগইন করুন';
+    return `লগইন সেশন শেষ হয়ে গেছে: ${msg}`;
   }
   if (msg.includes('foreign key') || msg.includes('violates foreign key')) {
-    return 'সম্পর্কিত তথ্য পাওয়া যায়নি বা আগেই মুছে ফেলা হয়েছে';
+    return `সম্পর্কিত তথ্য পাওয়া যায়নি বা আগেই মুছে ফেলা হয়েছে: ${msg}`;
   }
   if (msg.includes('duplicate key') || msg.includes('already exists')) {
-    return 'এই তথ্যটি ইতিমধ্যে ডাটাবেসে রয়েছে';
+    return `এই তথ্যটি ইতিমধ্যে ডাটাবেসে রয়েছে: ${msg}`;
   }
   if (msg.includes('invalid input syntax')) {
-    return 'প্রদত্ত তথ্যের ফরম্যাট সঠিক নয়';
+    return `প্রদত্ত তথ্যের ফরম্যাট সঠিক নয়: ${msg}`;
   }
   if (msg.includes('Failed to fetch') || msg.includes('network')) {
-    return 'ডাটাবেস সংযোগ ব্যর্থ হয়েছে, ইন্টারনেট সংযোগ পরীক্ষা করুন';
+    return `ডাটাবেস সংযোগ ব্যর্থ হয়েছে, ইন্টারনেট সংযোগ পরীক্ষা করুন (${msg})`;
   }
   return msg || 'ডাটাবেস অপারেশন ব্যর্থ হয়েছে';
+}
+
+export function computeDashboardStats(
+  allDonations: Donation[] = [],
+  allExpenses: Expense[] = [],
+  allMahfils: Mahfil[] = []
+): DashboardStats {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [currentYear, currentMonth] = todayStr.split('-');
+
+  const safeDonations = Array.isArray(allDonations) ? allDonations : [];
+  const safeExpenses = Array.isArray(allExpenses) ? allExpenses : [];
+  const safeMahfils = Array.isArray(allMahfils) ? allMahfils : [];
+
+  // Today's totals
+  const todayDonations = safeDonations
+    .filter((d) => (d.date || d.donationDate || '') === todayStr)
+    .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+
+  const todayExpenses = safeExpenses
+    .filter((e) => (e.date || e.expenseDate || '') === todayStr)
+    .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+  // This month
+  const thisMonthDonations = safeDonations
+    .filter((d) => (d.date || d.donationDate || '').startsWith(`${currentYear}-${currentMonth}`))
+    .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+
+  const thisMonthExpenses = safeExpenses
+    .filter((e) => (e.date || e.expenseDate || '').startsWith(`${currentYear}-${currentMonth}`))
+    .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+  const thisMonthBalance = thisMonthDonations - thisMonthExpenses;
+
+  // This year
+  const thisYearDonations = safeDonations
+    .filter((d) => (d.date || d.donationDate || '').startsWith(`${currentYear}-`))
+    .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+
+  const thisYearExpenses = safeExpenses
+    .filter((e) => (e.date || e.expenseDate || '').startsWith(`${currentYear}-`))
+    .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+  const thisYearBalance = thisYearDonations - thisYearExpenses;
+
+  // Lifetime balance
+  const totalDonationsLifetime = safeDonations.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+  const totalExpensesLifetime = safeExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const currentBalance = totalDonationsLifetime - totalExpensesLifetime;
+
+  return {
+    todayDonations,
+    todayExpenses,
+    currentBalance,
+    thisMonthDonations,
+    thisMonthExpenses,
+    thisMonthBalance,
+    thisYearDonations,
+    thisYearExpenses,
+    thisYearBalance,
+    recentDonations: safeDonations.slice(0, 5),
+    recentExpenses: safeExpenses.slice(0, 5),
+    recentMahfils: safeMahfils.slice(0, 4),
+  };
 }
 
 export const databaseService = {
@@ -54,13 +122,30 @@ export const databaseService = {
 
   // ---------------- MEMBERS ----------------
   async getMembers(): Promise<Member[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('ডাটাবেস সংযোগ কনফিগার করা হয়নি');
     
-    const { data, error } = await supabase
+    // 1. Query primary members table
+    let { data, error } = await supabase
       .from('members')
       .select('*')
       .order('name', { ascending: true });
       
+    // 2. Fallback to public_members view if primary returns nothing or error
+    if ((error || !data || data.length === 0)) {
+      try {
+        const viewRes = await supabase.from('public_members').select('*').order('name', { ascending: true });
+        if (!viewRes.error && viewRes.data && viewRes.data.length > 0) {
+          data = viewRes.data;
+          error = null;
+        } else if (!viewRes.error && viewRes.data && error) {
+          data = viewRes.data;
+          error = null;
+        }
+      } catch {
+        // public view not configured, preserve original error if any
+      }
+    }
+
     if (error) {
       console.error('Error fetching members from Supabase:', error);
       throw new Error(translateErrorMessage(error));
@@ -68,15 +153,15 @@ export const databaseService = {
     
     return (data || []).map((m: any) => ({
       id: m.id,
-      name: m.name,
-      phone: m.phone || '',
-      mobileNumber: m.phone || '',
+      name: m.name || '',
+      phone: m.phone || m.mobile_number || m.mobileNumber || '',
+      mobileNumber: m.phone || m.mobile_number || m.mobileNumber || '',
       address: m.address || '',
       notes: m.notes || '',
-      isActive: m.is_active !== false,
-      status: m.is_active !== false ? 'active' : 'inactive',
-      createdAt: m.created_at,
-      updatedAt: m.updated_at,
+      isActive: m.is_active !== false && m.status !== 'inactive',
+      status: (m.is_active !== false && m.status !== 'inactive') ? 'active' : 'inactive',
+      createdAt: m.created_at || m.createdAt || '',
+      updatedAt: m.updated_at || m.updatedAt || '',
     }));
   },
 
@@ -170,30 +255,50 @@ export const databaseService = {
 
   // ---------------- MAHFILS ----------------
   async getMahfils(): Promise<Mahfil[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('ডাটাবেস সংযোগ কনফিগার করা হয়নি');
 
-    const { data, error } = await supabase
+    // 1. Query primary mahfils table
+    let { data, error } = await supabase
       .from('mahfils')
       .select('*')
       .order('event_date', { ascending: false });
+
+    // 2. Fallback to public_mahfils view if primary returns nothing or error
+    if ((error || !data || data.length === 0)) {
+      try {
+        const viewRes = await supabase.from('public_mahfils').select('*').order('event_date', { ascending: false });
+        if (!viewRes.error && viewRes.data && viewRes.data.length > 0) {
+          data = viewRes.data;
+          error = null;
+        } else if (!viewRes.error && viewRes.data && error) {
+          data = viewRes.data;
+          error = null;
+        }
+      } catch {
+        // public view not configured, preserve original error if any
+      }
+    }
 
     if (error) {
       console.error('Error fetching mahfils:', error);
       throw new Error(translateErrorMessage(error));
     }
 
-    return (data || []).map((m: any) => ({
-      id: m.id,
-      name: m.name,
-      date: m.event_date,
-      eventDate: m.event_date,
-      location: m.location,
-      description: m.description || '',
-      status: 'completed',
-      createdBy: m.created_by,
-      createdAt: m.created_at,
-      updatedAt: m.updated_at,
-    }));
+    return (data || []).map((m: any) => {
+      const rawDate = m.event_date || m.date || '';
+      return {
+        id: m.id,
+        name: m.name || '',
+        date: rawDate,
+        eventDate: rawDate,
+        location: m.location || '',
+        description: m.description || '',
+        status: m.status || 'completed',
+        createdBy: m.created_by || '',
+        createdAt: m.created_at || m.createdAt || '',
+        updatedAt: m.updated_at || m.updatedAt || '',
+      };
+    });
   },
 
   async addMahfil(mahfil: Omit<Mahfil, 'id' | 'createdAt'>): Promise<Mahfil> {
@@ -284,7 +389,7 @@ export const databaseService = {
 
   // ---------------- DONATIONS ----------------
   async getDonations(filters?: FilterOptions): Promise<Donation[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('ডাটাবেস সংযোগ কনফিগার করা হয়নি');
 
     let query = supabase
       .from('donations')
@@ -304,47 +409,79 @@ export const databaseService = {
       query = query.eq('mahfil_id', filters.mahfilId);
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+
+    // Fallback to public_donations view if primary returns nothing or error
+    if ((error || !data || data.length === 0)) {
+      try {
+        let viewQuery = supabase
+          .from('public_donations')
+          .select('*')
+          .order('donation_date', { ascending: false });
+
+        if (filters?.date) viewQuery = viewQuery.eq('donation_date', filters.date);
+        if (filters?.startDate && filters?.endDate) {
+          viewQuery = viewQuery.gte('donation_date', filters.startDate).lte('donation_date', filters.endDate);
+        }
+        if (filters?.category) viewQuery = viewQuery.eq('purpose', filters.category);
+        if (filters?.mahfilId) viewQuery = viewQuery.eq('mahfil_id', filters.mahfilId);
+
+        const viewRes = await viewQuery;
+        if (!viewRes.error && viewRes.data && viewRes.data.length > 0) {
+          data = viewRes.data;
+          error = null;
+        } else if (!viewRes.error && viewRes.data && error) {
+          data = viewRes.data;
+          error = null;
+        }
+      } catch {
+        // public view not configured, preserve original error if any
+      }
+    }
+
     if (error) {
       console.error('Error fetching donations:', error);
       throw new Error(translateErrorMessage(error));
     }
 
-    const list: Donation[] = (data || []).map((d: any) => ({
-      id: d.id,
-      donorName: d.donor_name,
-      memberId: d.member_id,
-      phone: d.phone || '',
-      mobileNumber: d.phone || '',
-      amount: Number(d.amount),
-      date: d.donation_date,
-      donationDate: d.donation_date,
-      category: d.purpose,
-      purpose: d.purpose,
-      mahfilId: d.mahfil_id,
-      paymentMethod: d.payment_method,
-      notes: d.notes || '',
-      createdBy: d.created_by,
-      createdAt: d.created_at,
-      updatedAt: d.updated_at,
-    }));
+    const list: Donation[] = (data || []).map((d: any) => {
+      const rawDate = d.donation_date || d.date || '';
+      return {
+        id: d.id,
+        donorName: d.donor_name || d.donorName || '',
+        memberId: d.member_id || d.memberId || null,
+        phone: d.phone || d.mobile_number || d.mobileNumber || '',
+        mobileNumber: d.phone || d.mobile_number || d.mobileNumber || '',
+        amount: Number(d.amount) || 0,
+        date: rawDate,
+        donationDate: rawDate,
+        category: d.purpose || d.category || 'সাধারণ দান',
+        purpose: d.purpose || d.category || 'সাধারণ দান',
+        mahfilId: d.mahfil_id || d.mahfilId || null,
+        paymentMethod: d.payment_method || d.paymentMethod || 'cash',
+        notes: d.notes || '',
+        createdBy: d.created_by || '',
+        createdAt: d.created_at || d.createdAt || '',
+        updatedAt: d.updated_at || d.updatedAt || '',
+      };
+    });
 
     // Apply client-side search and month/year filters
     return list.filter((item) => {
       if (filters?.search) {
         const q = filters.search.toLowerCase().trim();
-        const matchesName = item.donorName.toLowerCase().includes(q);
+        const matchesName = (item.donorName || '').toLowerCase().includes(q);
         const matchesMobile = (item.phone || '').includes(q);
         const matchesNotes = (item.notes || '').toLowerCase().includes(q);
         const matchesPurpose = (item.purpose || '').toLowerCase().includes(q);
         if (!matchesName && !matchesMobile && !matchesNotes && !matchesPurpose) return false;
       }
       if (filters?.year) {
-        const itemYear = item.date.split('-')[0];
+        const itemYear = (item.date || '').split('-')[0];
         if (itemYear !== filters.year) return false;
       }
       if (filters?.month) {
-        const itemMonth = item.date.split('-')[1];
+        const itemMonth = (item.date || '').split('-')[1];
         if (itemMonth !== filters.month) return false;
       }
       return true;
@@ -465,7 +602,7 @@ export const databaseService = {
 
   // ---------------- EXPENSES ----------------
   async getExpenses(filters?: FilterOptions): Promise<Expense[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('ডাটাবেস সংযোগ কনফিগার করা হয়নি');
 
     let query = supabase
       .from('expenses')
@@ -485,45 +622,77 @@ export const databaseService = {
       query = query.eq('mahfil_id', filters.mahfilId);
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+
+    // Fallback to public_expenses view if primary returns nothing or error
+    if ((error || !data || data.length === 0)) {
+      try {
+        let viewQuery = supabase
+          .from('public_expenses')
+          .select('*')
+          .order('expense_date', { ascending: false });
+
+        if (filters?.date) viewQuery = viewQuery.eq('expense_date', filters.date);
+        if (filters?.startDate && filters?.endDate) {
+          viewQuery = viewQuery.gte('expense_date', filters.startDate).lte('expense_date', filters.endDate);
+        }
+        if (filters?.category) viewQuery = viewQuery.eq('category', filters.category);
+        if (filters?.mahfilId) viewQuery = viewQuery.eq('mahfil_id', filters.mahfilId);
+
+        const viewRes = await viewQuery;
+        if (!viewRes.error && viewRes.data && viewRes.data.length > 0) {
+          data = viewRes.data;
+          error = null;
+        } else if (!viewRes.error && viewRes.data && error) {
+          data = viewRes.data;
+          error = null;
+        }
+      } catch {
+        // public view not configured, preserve original error if any
+      }
+    }
+
     if (error) {
       console.error('Error fetching expenses:', error);
       throw new Error(translateErrorMessage(error));
     }
 
-    const list: Expense[] = (data || []).map((e: any) => ({
-      id: e.id,
-      title: e.description || e.paid_to || e.category,
-      date: e.expense_date,
-      expenseDate: e.expense_date,
-      category: e.category,
-      description: e.description || '',
-      amount: Number(e.amount),
-      recipient: e.paid_to,
-      paidTo: e.paid_to,
-      mahfilId: e.mahfil_id,
-      paymentMethod: e.payment_method,
-      notes: e.notes || '',
-      createdBy: e.created_by,
-      createdAt: e.created_at,
-      updatedAt: e.updated_at,
-    }));
+    const list: Expense[] = (data || []).map((e: any) => {
+      const rawDate = e.expense_date || e.date || '';
+      return {
+        id: e.id,
+        title: e.description || e.paid_to || e.title || e.category || 'সাধারণ খরচ',
+        date: rawDate,
+        expenseDate: rawDate,
+        category: e.category || 'সাধারণ খরচ',
+        description: e.description || e.title || '',
+        amount: Number(e.amount) || 0,
+        recipient: e.paid_to || e.recipient || '',
+        paidTo: e.paid_to || e.recipient || '',
+        mahfilId: e.mahfil_id || e.mahfilId || null,
+        paymentMethod: e.payment_method || e.paymentMethod || 'cash',
+        notes: e.notes || '',
+        createdBy: e.created_by || '',
+        createdAt: e.created_at || e.createdAt || '',
+        updatedAt: e.updated_at || e.updatedAt || '',
+      };
+    });
 
     return list.filter((item) => {
       if (filters?.search) {
         const q = filters.search.toLowerCase().trim();
-        const matchesTitle = item.title.toLowerCase().includes(q);
-        const matchesRecipient = item.recipient.toLowerCase().includes(q);
+        const matchesTitle = (item.title || '').toLowerCase().includes(q);
+        const matchesRecipient = (item.recipient || '').toLowerCase().includes(q);
         const matchesNotes = (item.notes || '').toLowerCase().includes(q);
-        const matchesCat = item.category.toLowerCase().includes(q);
+        const matchesCat = (item.category || '').toLowerCase().includes(q);
         if (!matchesTitle && !matchesRecipient && !matchesNotes && !matchesCat) return false;
       }
       if (filters?.year) {
-        const itemYear = item.date.split('-')[0];
+        const itemYear = (item.date || '').split('-')[0];
         if (itemYear !== filters.year) return false;
       }
       if (filters?.month) {
-        const itemMonth = item.date.split('-')[1];
+        const itemMonth = (item.date || '').split('-')[1];
         if (itemMonth !== filters.month) return false;
       }
       return true;
@@ -646,58 +815,17 @@ export const databaseService = {
       this.getMahfils(),
     ]);
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    const [currentYear, currentMonth] = todayStr.split('-');
+    return computeDashboardStats(allDonations, allExpenses, allMahfils);
+  },
 
-    // Today's totals
-    const todayDonations = allDonations
-      .filter((d) => d.date === todayStr)
-      .reduce((sum, d) => sum + d.amount, 0);
-
-    const todayExpenses = allExpenses
-      .filter((e) => e.date === todayStr)
-      .reduce((sum, e) => sum + e.amount, 0);
-
-    // This month
-    const thisMonthDonations = allDonations
-      .filter((d) => d.date.startsWith(`${currentYear}-${currentMonth}`))
-      .reduce((sum, d) => sum + d.amount, 0);
-
-    const thisMonthExpenses = allExpenses
-      .filter((e) => e.date.startsWith(`${currentYear}-${currentMonth}`))
-      .reduce((sum, e) => sum + e.amount, 0);
-
-    const thisMonthBalance = thisMonthDonations - thisMonthExpenses;
-
-    // This year
-    const thisYearDonations = allDonations
-      .filter((d) => d.date.startsWith(`${currentYear}-`))
-      .reduce((sum, d) => sum + d.amount, 0);
-
-    const thisYearExpenses = allExpenses
-      .filter((e) => e.date.startsWith(`${currentYear}-`))
-      .reduce((sum, e) => sum + e.amount, 0);
-
-    const thisYearBalance = thisYearDonations - thisYearExpenses;
-
-    // Lifetime balance
-    const totalDonationsLifetime = allDonations.reduce((sum, d) => sum + d.amount, 0);
-    const totalExpensesLifetime = allExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const currentBalance = totalDonationsLifetime - totalExpensesLifetime;
-
-    return {
-      todayDonations,
-      todayExpenses,
-      currentBalance,
-      thisMonthDonations,
-      thisMonthExpenses,
-      thisMonthBalance,
-      thisYearDonations,
-      thisYearExpenses,
-      thisYearBalance,
-      recentDonations: allDonations.slice(0, 5),
-      recentExpenses: allExpenses.slice(0, 5),
-      recentMahfils: allMahfils.slice(0, 4),
-    };
+  // ---------------- PUBLIC SUMMARY (RPC) ----------------
+  async getPublicSummary(): Promise<PublicSummary> {
+    if (!supabase) throw new Error('ডাটাবেস সংযোগ কনফিগার করা হয়নি');
+    const { data, error } = await supabase.rpc('get_public_summary');
+    if (error) {
+      console.error('Error fetching public summary from Supabase RPC:', error);
+      throw new Error(translateErrorMessage(error));
+    }
+    return data as PublicSummary;
   },
 };

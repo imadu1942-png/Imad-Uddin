@@ -18,7 +18,9 @@ import { MahfilDetailModal } from './components/mahfil/MahfilDetailModal';
 import { MemberFormModal } from './components/members/MemberFormModal';
 
 // Pages
+import { SplashScreen } from './components/common/SplashScreen';
 import { PublicEntryPage } from './pages/PublicEntryPage';
+import { PublicDashboardPage } from './pages/PublicDashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DonationsPage } from './pages/DonationsPage';
@@ -38,8 +40,15 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Guest name state (UI-only welcome, no DB auth or modification)
-  const [guestName, setGuestName] = useState<string>('');
+  const [guestName, setGuestName] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem('guest_name') || '';
+    } catch {
+      return '';
+    }
+  });
   const [showAdminLogin, setShowAdminLogin] = useState<boolean>(false);
+  const [isSplashComplete, setIsSplashComplete] = useState<boolean>(false);
 
   // Authentication & Roles
   const {
@@ -53,6 +62,13 @@ export default function App() {
     canDelete: authCanDelete,
   } = useAuth();
 
+  // Access rights
+  const isAuthenticated = Boolean(user);
+  const isPublicGuest = !isAuthenticated && Boolean(guestName);
+  const effectiveRole: UserRole = isAuthenticated ? role : 'viewer';
+  const canEdit = isAuthenticated ? authCanEdit : false;
+  const canDelete = isAuthenticated ? authCanDelete : false;
+
   // Financial data state
   const {
     donations,
@@ -61,6 +77,7 @@ export default function App() {
     members,
     dashboardStats,
     isLoading: isDataLoading,
+    error: dataError,
     notification,
     clearNotification,
     refreshAll,
@@ -77,14 +94,7 @@ export default function App() {
     updateMember,
     deleteMember,
     isDatabaseConfigured,
-  } = useFinancialData();
-
-  // Access rights
-  const isAuthenticated = Boolean(user);
-  const isPublicGuest = !isAuthenticated && Boolean(guestName);
-  const effectiveRole: UserRole = isAuthenticated ? role : 'viewer';
-  const canEdit = isAuthenticated ? authCanEdit : false;
-  const canDelete = isAuthenticated ? authCanDelete : false;
+  } = useFinancialData({ isAuthLoading, userId: user?.id, isPublicGuest });
 
   // Donation Modals State
   const [isDonationFormOpen, setIsDonationFormOpen] = useState(false);
@@ -205,18 +215,52 @@ export default function App() {
     setIsDonationFormOpen(true);
   };
 
+  const handleEnterAsGuest = (name: string) => {
+    const trimmed = name?.trim() || 'সম্মানিত অতিথি';
+    setGuestName(trimmed);
+    try {
+      sessionStorage.setItem('guest_name', trimmed);
+    } catch {}
+    setActiveTab('dashboard');
+  };
+
+  const handleExitGuest = () => {
+    setGuestName('');
+    try {
+      sessionStorage.removeItem('guest_name');
+    } catch {}
+    setActiveTab('dashboard');
+  };
+
   const handleAdminSignIn = async (email: string, pass: string) => {
     await signIn(email, pass);
     setShowAdminLogin(false);
     setGuestName('');
+    try {
+      sessionStorage.removeItem('guest_name');
+    } catch {}
+    await refreshAll();
   };
 
   const handleSignOut = async () => {
     await signOut();
     setShowAdminLogin(false);
     setGuestName('');
+    try {
+      sessionStorage.removeItem('guest_name');
+    } catch {}
     setActiveTab('dashboard');
   };
+
+  // 0. Initial Full-Screen Splash Screen with Official Logo & Progress (0% to 100%)
+  if (!isSplashComplete) {
+    return (
+      <SplashScreen
+        onComplete={() => setIsSplashComplete(true)}
+        durationMs={4200}
+      />
+    );
+  }
 
   // 1. Initial Authentication Loading State
   if (isAuthLoading) {
@@ -225,7 +269,7 @@ export default function App() {
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" />
           <p className="text-xs sm:text-sm text-stone-300 font-medium">
-            সেশন ও আর্থিক হিসাব লোড করা হচ্ছে...
+            হিসাব লোড হচ্ছে...
           </p>
         </div>
       </div>
@@ -248,7 +292,7 @@ export default function App() {
 
     return (
       <PublicEntryPage
-        onEnterAsGuest={(name) => setGuestName(name)}
+        onEnterAsGuest={handleEnterAsGuest}
         onOpenAdminLogin={() => setShowAdminLogin(true)}
       />
     );
@@ -277,10 +321,7 @@ export default function App() {
           currentUser={user}
           guestName={guestName}
           onOpenAdminLogin={() => setShowAdminLogin(true)}
-          onExitGuest={() => {
-            setGuestName('');
-            setActiveTab('dashboard');
-          }}
+          onExitGuest={handleExitGuest}
           onSignOut={handleSignOut}
           isDatabaseConfigured={isDatabaseConfigured}
           canEdit={canEdit}
@@ -288,14 +329,36 @@ export default function App() {
 
         {/* Content Container */}
         <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-          {isDataLoading && !dashboardStats ? (
-            <div className="flex items-center justify-center min-h-[50vh]">
-              <div className="text-center space-y-2">
-                <div className="w-8 h-8 border-3 border-emerald-700 border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-xs text-stone-500 font-medium">
-                  ডাটাবেস থেকে হিসাব তথ্য সংগ্রহ করা হচ্ছে...
-                </p>
+          {isPublicGuest ? (
+            <PublicDashboardPage guestName={guestName} />
+          ) : isDataLoading ? (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3">
+              <div className="w-10 h-10 border-3 border-emerald-700 border-t-transparent rounded-full animate-spin mx-auto" />
+              <p className="text-sm text-stone-700 font-semibold">
+                হিসাব লোড হচ্ছে...
+              </p>
+              <p className="text-xs text-stone-500">
+                সুপাবেস ডাটাবেস থেকে সর্বশেষ আর্থিক তথ্য সংগ্রহ করা হচ্ছে
+              </p>
+            </div>
+          ) : dataError ? (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] p-6 text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center font-bold text-xl">
+                !
               </div>
+              <h3 className="text-base font-bold text-stone-900">
+                হিসাব লোড করা যাচ্ছে না। আবার চেষ্টা করুন।
+              </h3>
+              <p className="text-xs text-rose-600 max-w-md">
+                {dataError}
+              </p>
+              <button
+                type="button"
+                onClick={refreshAll}
+                className="mt-2 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                আবার চেষ্টা করুন
+              </button>
             </div>
           ) : (
             <>
@@ -311,6 +374,9 @@ export default function App() {
                   onAddMahfil={handleOpenAddMahfil}
                   onSelectMahfil={(m) => setViewingMahfil(m)}
                   canEdit={canEdit}
+                  isLoading={isDataLoading}
+                  error={dataError}
+                  onRetry={refreshAll}
                 />
               )}
 
@@ -428,12 +494,14 @@ export default function App() {
         </main>
       </div>
 
-      {/* Mobile Bottom Navigation */}
-      <MobileBottomNav
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        onOpenMenu={() => setIsMobileMenuOpen(true)}
-      />
+      {/* Mobile Bottom Navigation (Authenticated Admin/Cashier only) */}
+      {!isPublicGuest && (
+        <MobileBottomNav
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          onOpenMenu={() => setIsMobileMenuOpen(true)}
+        />
+      )}
 
       {/* Mobile Drawer Menu */}
       <MobileMenuDrawer

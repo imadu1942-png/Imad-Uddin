@@ -19,10 +19,10 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE TABLE IF NOT EXISTS public.members (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name TEXT NOT NULL,
-  mobile_number TEXT,
+  phone TEXT,
   address TEXT,
   notes TEXT,
-  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive')) NOT NULL,
+  is_active BOOLEAN DEFAULT true NOT NULL,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -31,10 +31,10 @@ CREATE TABLE IF NOT EXISTS public.members (
 CREATE TABLE IF NOT EXISTS public.mahfils (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name TEXT NOT NULL,
-  date DATE NOT NULL,
+  event_date DATE NOT NULL,
   location TEXT NOT NULL,
   description TEXT,
-  status TEXT DEFAULT 'completed' CHECK (status IN ('upcoming', 'completed', 'ongoing')) NOT NULL,
+  created_by TEXT,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -44,14 +44,14 @@ CREATE TABLE IF NOT EXISTS public.donations (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   donor_name TEXT NOT NULL,
   member_id UUID REFERENCES public.members(id) ON DELETE SET NULL,
-  mobile_number TEXT,
+  phone TEXT,
   amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
-  date DATE NOT NULL,
-  category TEXT NOT NULL,
+  donation_date DATE NOT NULL,
+  purpose TEXT NOT NULL,
   mahfil_id UUID REFERENCES public.mahfils(id) ON DELETE SET NULL,
   payment_method TEXT DEFAULT 'cash' NOT NULL,
   notes TEXT,
-  created_by TEXT NOT NULL,
+  created_by TEXT,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -59,28 +59,28 @@ CREATE TABLE IF NOT EXISTS public.donations (
 -- ৫. খরচ টেবিল (Expenses)
 CREATE TABLE IF NOT EXISTS public.expenses (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  title TEXT NOT NULL,
-  date DATE NOT NULL,
+  expense_date DATE NOT NULL,
   category TEXT NOT NULL,
   description TEXT,
   amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
-  recipient TEXT NOT NULL,
+  paid_to TEXT NOT NULL,
   mahfil_id UUID REFERENCES public.mahfils(id) ON DELETE SET NULL,
   payment_method TEXT DEFAULT 'cash' NOT NULL,
   notes TEXT,
-  created_by TEXT NOT NULL,
+  created_by TEXT,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 -- ইনডেক্সিং (দ্রুত ফিল্টারিং এবং সার্চের জন্য)
-CREATE INDEX IF NOT EXISTS idx_donations_date ON public.donations(date);
-CREATE INDEX IF NOT EXISTS idx_donations_category ON public.donations(category);
+CREATE INDEX IF NOT EXISTS idx_donations_date ON public.donations(donation_date);
+CREATE INDEX IF NOT EXISTS idx_donations_purpose ON public.donations(purpose);
 CREATE INDEX IF NOT EXISTS idx_donations_mahfil ON public.donations(mahfil_id);
-CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses(date);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses(expense_date);
 CREATE INDEX IF NOT EXISTS idx_expenses_category ON public.expenses(category);
 CREATE INDEX IF NOT EXISTS idx_expenses_mahfil ON public.expenses(mahfil_id);
 CREATE INDEX IF NOT EXISTS idx_members_name ON public.members(name);
+CREATE INDEX IF NOT EXISTS idx_mahfils_date ON public.mahfils(event_date);
 
 -- =========================================================================
 -- Row Level Security (RLS) পলিসি
@@ -111,7 +111,43 @@ CREATE POLICY "Allow authenticated read on donations"
 CREATE POLICY "Allow authenticated read on expenses"
   ON public.expenses FOR SELECT TO authenticated USING (true);
 
--- ক্যাশিয়ার ও অ্যাডমিন ডাটা যোগ/আপডেট করতে পারবে
+-- নিরাপদ রিড-অনলি পাবলিক পলিসি (Secure Read-Only Access for Public View)
+-- শুধুমাত্র পাবলিক ভিউয়ের জন্য SELECT অনুমোদন, কোনো INSERT/UPDATE/DELETE নয়
+CREATE POLICY "Allow public read-only on members"
+  ON public.members FOR SELECT TO anon USING (true);
+
+CREATE POLICY "Allow public read-only on mahfils"
+  ON public.mahfils FOR SELECT TO anon USING (true);
+
+CREATE POLICY "Allow public read-only on donations"
+  ON public.donations FOR SELECT TO anon USING (true);
+
+CREATE POLICY "Allow public read-only on expenses"
+  ON public.expenses FOR SELECT TO anon USING (true);
+
+-- রিড-অনলি পাবলিক ভিউ (Secure Read-Only Public Views for Guest Dashboard)
+CREATE OR REPLACE VIEW public.public_members AS
+  SELECT id, name, phone, address, notes, is_active, created_at
+  FROM public.members;
+
+CREATE OR REPLACE VIEW public.public_mahfils AS
+  SELECT id, name, event_date, location, description, created_at
+  FROM public.mahfils;
+
+CREATE OR REPLACE VIEW public.public_donations AS
+  SELECT id, donor_name, member_id, phone, amount, donation_date, purpose, mahfil_id, payment_method, notes, created_at
+  FROM public.donations;
+
+CREATE OR REPLACE VIEW public.public_expenses AS
+  SELECT id, expense_date, category, description, amount, paid_to, mahfil_id, payment_method, notes, created_at
+  FROM public.expenses;
+
+GRANT SELECT ON public.public_members TO anon, authenticated;
+GRANT SELECT ON public.public_mahfils TO anon, authenticated;
+GRANT SELECT ON public.public_donations TO anon, authenticated;
+GRANT SELECT ON public.public_expenses TO anon, authenticated;
+
+-- ক্যাশিয়ার ও অ্যাডমিন ডাটা যোগ/আপডেট করতে পারবে (অননুমোদিত বা পাবলিক কোনোভাবেই পারবে না)
 CREATE POLICY "Allow cashier and admin insert on donations"
   ON public.donations FOR INSERT TO authenticated
   WITH CHECK (public.get_user_role() IN ('cashier', 'admin'));

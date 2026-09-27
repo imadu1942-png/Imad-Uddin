@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import officialLogo from '../../assets/images/official_logo_1790499886861.jpg';
 import { Plus, HeartHandshake, Receipt, CalendarPlus, UserPlus, Database, CloudOff, LogOut, User as UserIcon, Shield } from 'lucide-react';
 import { UserRole, UserProfile } from '../../types/database.types';
 
@@ -48,18 +49,28 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-stone-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
         {/* Organization Brand & Title */}
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-base sm:text-xl font-bold text-stone-900 tracking-tight truncate">
-              আশেকানে গাউছিয়া
-            </h1>
-            <span className={`inline-block px-2 py-0.5 text-[11px] sm:text-xs font-semibold rounded-md border ${currentRoleInfo.badgeClass}`}>
-              {currentRoleInfo.label}
-            </span>
+        <div className="min-w-0 flex items-center gap-2.5">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-black border border-emerald-500/40 p-0.5 shrink-0 shadow-xs flex items-center justify-center overflow-hidden">
+            <img
+              src={officialLogo}
+              alt="আশেকানে গাউছিয়া অফিসিয়াল লোগো"
+              className="w-full h-full object-contain rounded-full"
+              referrerPolicy="no-referrer"
+            />
           </div>
-          <p className="text-xs text-stone-500 truncate hidden sm:block mt-0.5">
-            হাদিয়া, মাহফিল ও আয়-ব্যয়ের হিসাব
-          </p>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-base sm:text-xl font-bold text-stone-900 tracking-tight truncate">
+                আশেকানে গাউছিয়া
+              </h1>
+              <span className={`inline-block px-2 py-0.5 text-[11px] sm:text-xs font-semibold rounded-md border ${currentRoleInfo.badgeClass}`}>
+                {currentRoleInfo.label}
+              </span>
+            </div>
+            <p className="text-xs text-stone-500 truncate hidden sm:block mt-0.5">
+              হাদিয়া, মাহফিল ও আয়-ব্যয়ের হিসাব
+            </p>
+          </div>
         </div>
 
         {/* Right side controls: User profile, Quick Action & Logout */}

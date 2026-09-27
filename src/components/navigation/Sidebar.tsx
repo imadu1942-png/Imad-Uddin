@@ -1,4 +1,5 @@
 import React from 'react';
+import officialLogo from '../../assets/images/official_logo_1790499886861.jpg';
 import {
   LayoutDashboard,
   HeartHandshake,
@@ -50,22 +51,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isPublicGuest = false,
 }) => {
   const visibleItems = isPublicGuest
-    ? navItems.filter((i) => i.key !== 'settings')
+    ? [
+        {
+          key: 'dashboard' as NavItemKey,
+          label: 'পাবলিক হিসাব',
+          icon: <LayoutDashboard className="w-5 h-5" />,
+        },
+      ]
     : navItems;
 
   return (
     <aside className="hidden lg:flex flex-col w-64 bg-stone-900 text-stone-100 min-h-screen border-r border-stone-800 shrink-0">
       {/* Brand Header */}
       <div className="p-5 border-b border-stone-800">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-lg bg-emerald-700 flex items-center justify-center text-white font-bold text-lg shadow-sm">
-            আ
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-black border border-emerald-500/40 p-0.5 shrink-0 shadow-sm flex items-center justify-center overflow-hidden">
+            <img
+              src={officialLogo}
+              alt="আশেকানে গাউছিয়া অফিসিয়াল লোগো"
+              className="w-full h-full object-contain rounded-full"
+              referrerPolicy="no-referrer"
+            />
           </div>
-          <div>
-            <h1 className="font-bold text-base text-white tracking-wide">
+          <div className="min-w-0">
+            <h1 className="font-bold text-base text-white tracking-wide truncate">
               আশেকানে গাউছিয়া
             </h1>
-            <p className="text-xs text-stone-400">
+            <p className="text-xs text-stone-400 truncate">
               হাদিয়া, মাহফিল ও আয়-ব্যয়
             </p>
           </div>
