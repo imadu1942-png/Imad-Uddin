@@ -3,7 +3,8 @@ import { GOOGLE_SHEET_CONFIG, isGoogleSheetConfigured } from '../config/googleSh
 export interface OrgMember {
   name: string;
   position: string;
-  displayOrder: number;
+  displayOrder?: number | null;
+  sheetIndex: number;
 }
 
 export interface FetchOrgMembersResult {
@@ -13,42 +14,68 @@ export interface FetchOrgMembersResult {
 }
 
 /**
- * Normalizes common Google Sheet URLs (e.g. view/edit link) to a direct CSV export endpoint.
+ * Normalizes Google Sheet URLs into a production-safe, CORS-friendly CSV endpoint.
+ *
+ * Supported formats:
+ * 1. Published to web CSV:
+ *    https://docs.google.com/spreadsheets/d/e/2PACX-.../pub?output=csv
+ *    https://docs.google.com/spreadsheets/d/e/2PACX-.../pub?gid=0&single=true&output=csv
+ * 2. Published to web HTML (/pubhtml or /pub without output=csv):
+ *    Auto-converts to /pub?output=csv
+ * 3. Standard Google Sheet view/edit URL:
+ *    https://docs.google.com/spreadsheets/d/{ID}/edit#gid=0
+ *    Auto-converts to Google Visualization CSV endpoint (which allows browser CORS):
+ *    https://docs.google.com/spreadsheets/d/{ID}/gviz/tq?tqx=out:csv
  */
 export function normalizeGoogleSheetUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (!trimmed) return '';
 
-  // If already an export or gviz link, return as is
+  // 1. If it's a published Google Sheet link (/spreadsheets/d/e/2PACX-...)
+  if (trimmed.includes('/spreadsheets/d/e/')) {
+    // If it's pubhtml, replace with pub
+    let url = trimmed.replace(/\/pubhtml([?#].*)?$/, '/pub$1');
+
+    // Ensure output=csv parameter is present
+    if (!url.includes('output=csv')) {
+      const sep = url.includes('?') ? '&' : '?';
+      url = `${url}${sep}output=csv`;
+    }
+    return url;
+  }
+
+  // 2. If it's already an explicit CSV endpoint, keep as is
   if (trimmed.includes('output=csv') || trimmed.includes('format=csv') || trimmed.includes('out:csv')) {
     return trimmed;
   }
 
-  // Handle standard https://docs.google.com/spreadsheets/d/{KEY}/edit...
+  // 3. If it's a standard Google Sheet ID (/spreadsheets/d/{SHEET_ID}/...)
+  // In client-side production (Netlify), Google's /export?format=csv triggers CORS issues.
+  // Google's /gviz/tq?tqx=out:csv supports CORS with Access-Control-Allow-Origin: *
   const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   if (match && match[1]) {
     const sheetId = match[1];
-    // Check if gid is present
     const gidMatch = trimmed.match(/[?&#]gid=([0-9]+)/);
     const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
-    return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam}`;
+    return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv${gidParam}`;
   }
 
   return trimmed;
 }
 
 /**
- * Parses CSV text safely handling quotes, newlines, and Bengali characters.
+ * Safely parses CSV text, handling quotes, commas within quotes, CRLF, and Bengali UTF-8 text.
  */
 function parseCSV(text: string): string[][] {
+  const cleanText = text.replace(/^\uFEFF/, ''); // Strip BOM if present
   const rows: string[][] = [];
   let currentRow: string[] = [];
   let currentField = '';
   let inQuotes = false;
 
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const nextChar = text[i + 1];
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
 
     if (char === '"') {
       if (inQuotes && nextChar === '"') {
@@ -86,15 +113,19 @@ function parseCSV(text: string): string[][] {
 }
 
 /**
- * Fetches and parses organizational members from the configured Google Sheet.
- * If the URL is equal to the placeholder, it returns isConfigured: false immediately WITHOUT fetching.
+ * Fetches and parses organizational members from the published Google Sheet CSV.
+ * - Completely read-only
+ * - No credentials exposed
+ * - No Supabase or financial data touched
+ * - Safe AbortController timeout
+ * - No localStorage, sessionStorage, or IndexedDB used
  */
 export async function fetchOrgMembersFromGoogleSheet(
   customUrl?: string
 ): Promise<FetchOrgMembersResult> {
   const urlToUse = customUrl || GOOGLE_SHEET_CONFIG.sheetUrl;
 
-  // 1. Safety check: Never attempt to fetch the placeholder
+  // 1. Safety check: Never attempt to fetch when unconfigured or placeholder
   if (!isGoogleSheetConfigured(urlToUse)) {
     return {
       isConfigured: false,
@@ -107,7 +138,7 @@ export async function fetchOrgMembersFromGoogleSheet(
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s safe timeout
+    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s safe timeout
 
     const response = await fetch(normalizedUrl, {
       method: 'GET',
@@ -120,7 +151,7 @@ export async function fetchOrgMembersFromGoogleSheet(
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`গুগল শিট সার্ভার ত্রুটি (${response.status}: ${response.statusText})`);
+      throw new Error(`গুগল শিট সার্ভার প্রতিক্রিয়া দেয়নি (${response.status}: ${response.statusText})`);
     }
 
     const csvText = await response.text();
@@ -132,9 +163,14 @@ export async function fetchOrgMembersFromGoogleSheet(
       };
     }
 
+    // Safety: If the response is an HTML login/error page rather than CSV
+    if (csvText.trim().startsWith('<!DOCTYPE html') || csvText.trim().startsWith('<html')) {
+      throw new Error('প্রদত্ত লিংকটি সরাসরি CSV ফরম্যাটের নয়। গুগল শিট থেকে File -> Share -> "Publish to web" করে CSV লিংক নির্বাচন করুন।');
+    }
+
     const rows = parseCSV(csvText);
     if (rows.length < 2) {
-      // Either empty or just a header row
+      // Empty sheet or only header row
       return {
         isConfigured: true,
         members: [],
@@ -142,20 +178,35 @@ export async function fetchOrgMembersFromGoogleSheet(
       };
     }
 
-    // Identify column indices based on header row
+    // Identify columns dynamically from header row
     const header = rows[0].map((h) => h.toLowerCase().trim());
-    
-    let nameIdx = header.findIndex((h) =>
-      h.includes('name') || h.includes('নাম') || h.includes('সদস্য')
+
+    let nameIdx = header.findIndex(
+      (h) => h.includes('name') || h.includes('নাম') || h.includes('সদস্য')
     );
-    let positionIdx = header.findIndex((h) =>
-      h.includes('position') || h.includes('পদবী') || h.includes('পদবি') || h.includes('role') || h.includes('designation')
+    let positionIdx = header.findIndex(
+      (h) =>
+        h.includes('position') ||
+        h.includes('পদবী') ||
+        h.includes('পদবি') ||
+        h.includes('পদ') ||
+        h.includes('role') ||
+        h.includes('designation') ||
+        h.includes('দায়িত্ব') ||
+        h.includes('দায়িত্ব')
     );
-    let orderIdx = header.findIndex((h) =>
-      h.includes('order') || h.includes('ক্রম') || h.includes('সিরিয়াল') || h.includes('সিরিয়াল') || h.includes('sort')
+    let orderIdx = header.findIndex(
+      (h) =>
+        h.includes('order') ||
+        h.includes('display') ||
+        h.includes('ক্রম') ||
+        h.includes('সিরিয়াল') ||
+        h.includes('সিরিয়াল') ||
+        h.includes('নম্বর') ||
+        h.includes('sort')
     );
 
-    // Default column fallback if headers not named specifically: 0 -> Name, 1 -> Position, 2 -> Order
+    // Fallback column positions if header text is custom: 0 = Name, 1 = Position, 2 = Display Order
     if (nameIdx === -1) nameIdx = 0;
     if (positionIdx === -1) positionIdx = 1;
     if (orderIdx === -1) orderIdx = 2;
@@ -168,23 +219,40 @@ export async function fetchOrgMembersFromGoogleSheet(
       const position = (row[positionIdx] || '').trim();
       const rawOrder = row[orderIdx] !== undefined ? row[orderIdx].trim() : '';
 
-      // Skip rows with no name
+      // Skip blank rows where name is empty
       if (!name) return;
 
-      let displayOrder = parseInt(rawOrder, 10);
-      if (isNaN(displayOrder)) {
-        displayOrder = rowIndex + 1;
+      let displayOrder: number | null = null;
+      if (rawOrder !== '') {
+        const parsed = parseInt(rawOrder, 10);
+        if (!isNaN(parsed)) {
+          displayOrder = parsed;
+        }
       }
 
       parsedMembers.push({
         name,
         position: position || 'সদস্য',
         displayOrder,
+        sheetIndex: rowIndex,
       });
     });
 
-    // Sort ascending by displayOrder
-    parsedMembers.sort((a, b) => a.displayOrder - b.displayOrder);
+    // Requirement 14: Sort by Display Order when available; otherwise preserve the sheet order.
+    parsedMembers.sort((a, b) => {
+      const hasA = a.displayOrder !== null && a.displayOrder !== undefined;
+      const hasB = b.displayOrder !== null && b.displayOrder !== undefined;
+
+      if (hasA && hasB) {
+        if (a.displayOrder !== b.displayOrder) {
+          return (a.displayOrder as number) - (b.displayOrder as number);
+        }
+        return a.sheetIndex - b.sheetIndex;
+      }
+      if (hasA && !hasB) return -1;
+      if (!hasA && hasB) return 1;
+      return a.sheetIndex - b.sheetIndex;
+    });
 
     return {
       isConfigured: true,
@@ -192,14 +260,12 @@ export async function fetchOrgMembersFromGoogleSheet(
       error: null,
     };
   } catch (err: any) {
-    console.warn('Google Sheet fetch note:', err?.message || err);
+    console.warn('Google Sheet CSV fetch notice:', err?.message || err);
     let errMsg = 'গুগল শিট থেকে সদস্য তালিকা লোড করা সম্ভব হয়নি।';
     if (err.name === 'AbortError') {
-      errMsg = 'গুগল শিট সংযোগের সময় শেষ হয়েছে (Timeout)। ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।';
-    } else if (err.message && err.message.includes('গুগল শিট')) {
+      errMsg = 'গুগল শিট সংযোগের সময় শেষ হয়েছে (Timeout)। অনুগ্রহ করে আবার চেষ্টা করুন।';
+    } else if (err.message) {
       errMsg = err.message;
-    } else {
-      errMsg = `গুগল শিট থেকে তথ্য সংগ্রহ করা যাচ্ছে না (${err?.message || 'অনুপলব্ধ'})। শিটটি "Anyone with the link can view" অথবা "Publish to web" করা আছে কিনা নিশ্চিত করুন।`;
     }
 
     return {

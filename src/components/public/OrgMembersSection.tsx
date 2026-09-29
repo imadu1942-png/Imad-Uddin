@@ -171,10 +171,10 @@ export const OrgMembersSection: React.FC<OrgMembersSectionProps> = ({
           <div className="max-w-lg mx-auto p-4 bg-stone-50 rounded-xl border border-stone-200/80 text-left text-xs text-stone-600 space-y-2">
             <div className="flex items-center gap-1.5 font-bold text-stone-800">
               <Info className="w-4 h-4 text-emerald-700 shrink-0" />
-              <span>এডমিনদের জন্য নির্দেশনা (Google Sheet Configuration):</span>
+              <span>এডমিনদের জন্য নির্দেশনা (Netlify / Google Sheet Setup):</span>
             </div>
             <p className="text-stone-500 leading-relaxed">
-              গুগল শিটের ৩টি কলাম (Name | Position | Display Order) রেখে শিটটি &quot;Publish to web (CSV)&quot; করুন এবং প্রাপ্ত লিঙ্কটি <code className="bg-white px-1.5 py-0.5 rounded border border-stone-300 font-mono text-[11px] text-emerald-800">src/config/googleSheetConfig.ts</code> ফাইলে যুক্ত করুন।
+              গুগল শিটের ৩টি কলাম (Name | Position | Display Order) রেখে File &gt; Share &gt; <strong>Publish to web</strong> এ যান। Format হিসেবে <strong>Comma-separated values (.csv)</strong> নির্বাচন করে Publish বাটনে ক্লিক করুন। প্রাপ্ত পাবলিশড CSV লিংকটি Netlify ড্যাশবোর্ডে Environment Variable হিসেবে <code className="bg-white px-1.5 py-0.5 rounded border border-stone-300 font-mono text-[11px] text-emerald-800 font-bold">VITE_PUBLIC_ORG_MEMBERS_SHEET_URL</code> এ যুক্ত করুন।
             </p>
           </div>
         </div>
@@ -207,7 +207,7 @@ export const OrgMembersSection: React.FC<OrgMembersSectionProps> = ({
             const initialChar = member.name.charAt(0) || 'স';
             return (
               <div
-                key={`${member.name}-${member.displayOrder}-${index}`}
+                key={`${member.name}-${member.sheetIndex}-${index}`}
                 className="bg-white rounded-xl border border-stone-200/90 shadow-xs p-4 sm:p-5 hover:border-emerald-300 hover:shadow-sm transition-all flex items-start gap-3.5 group"
               >
                 {/* Avatar Icon */}
@@ -224,9 +224,6 @@ export const OrgMembersSection: React.FC<OrgMembersSectionProps> = ({
                     <h5 className="font-bold text-stone-900 text-sm sm:text-base truncate group-hover:text-emerald-800 transition-colors">
                       {member.name}
                     </h5>
-                    <span className="text-[11px] font-mono text-stone-400 shrink-0 font-medium">
-                      #{toBengaliNumber(member.displayOrder)}
-                    </span>
                   </div>
 
                   <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
