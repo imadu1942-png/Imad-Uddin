@@ -1,10 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { Donation, Mahfil } from '../types/database.types';
 import {
   formatCurrency,
   formatBengaliDate,
   getPaymentMethodLabel,
   DONATION_CATEGORIES,
+  PAYMENT_METHODS,
   BENGALI_MONTHS,
   toBengaliNumber,
 } from '../utils/formatters';
@@ -18,9 +19,13 @@ import {
   Download,
   Calendar,
   X,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { EmptyState } from '../components/common/EmptyState';
+import { PaginationControls } from '../components/common/PaginationControls';
 import { exportToCSV } from '../utils/exportHelpers';
+import { databaseService, DonationFilterOptions } from '../services/databaseService';
 
 interface DonationsPageProps {
   donations: Donation[];
@@ -47,7 +52,11 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
   canDelete,
   isPublicGuest = false,
 }) => {
+  // Query & Filter States
+  const [page, setPage] = useState<number>(1);
+  const pageSize = 20;
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -55,15 +64,33 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
   const [selectedMahfil, setSelectedMahfil] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Paginated data state
+  const [pageDonations, setPageDonations] = useState<Donation[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalAmount, setTotalAmount] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [currentYearStr, currentMonthStr] = useMemo(() => todayStr.split('-'), [todayStr]);
 
+  // Debounce search input by 350ms to prevent spamming database queries
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   // Available years from dataset or current year
   const availableYears = useMemo(() => {
     const currentYear = new Date().getFullYear();
-    const set = new Set<string>([String(currentYear), String(currentYear - 1)]);
+    const set = new Set<string>([String(currentYear), String(currentYear - 1), String(currentYear - 2)]);
     donations.forEach((d) => {
       const yr = d.date.split('-')[0];
       if (yr) set.add(yr);
@@ -71,68 +98,94 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
     return Array.from(set).sort().reverse();
   }, [donations]);
 
-  // Filtered list
-  const filteredDonations = useMemo(() => {
-    return donations.filter((d) => {
-      // Search by donor name, phone number, notes
-      if (search) {
-        const q = search.toLowerCase().trim();
-        const matchesName = d.donorName.toLowerCase().includes(q);
-        const matchesMobile = (d.phone || d.mobileNumber || '').includes(q);
-        const matchesNotes = (d.notes || '').toLowerCase().includes(q);
-        const matchesPurpose = (d.purpose || d.category || '').toLowerCase().includes(q);
-        if (!matchesName && !matchesMobile && !matchesNotes && !matchesPurpose) return false;
-      }
+  // Build query filter options
+  const queryFilters = useMemo((): DonationFilterOptions => {
+    const f: DonationFilterOptions = {
+      page,
+      pageSize,
+      search: debouncedSearch || undefined,
+      category: selectedCategory || undefined,
+      mahfilId: selectedMahfil || undefined,
+      paymentMethod: selectedPaymentMethod || undefined,
+    };
 
-      // Date Preset Filtering
-      if (datePreset === 'today') {
-        if (d.date !== todayStr) return false;
-      } else if (datePreset === 'this_month') {
-        if (!d.date.startsWith(`${currentYearStr}-${currentMonthStr}`)) return false;
-      } else if (datePreset === 'this_year') {
-        if (!d.date.startsWith(`${currentYearStr}-`)) return false;
-      } else if (datePreset === 'custom') {
-        if (startDate && d.date < startDate) return false;
-        if (endDate && d.date > endDate) return false;
-      }
+    if (datePreset === 'today') {
+      f.date = todayStr;
+    } else if (datePreset === 'this_month') {
+      f.year = currentYearStr;
+      f.month = currentMonthStr;
+    } else if (datePreset === 'this_year') {
+      f.year = currentYearStr;
+    } else if (datePreset === 'custom') {
+      f.startDate = startDate || undefined;
+      f.endDate = endDate || undefined;
+    }
 
-      // Manual month/year/category/mahfil filters
-      if (selectedYear) {
-        const yr = d.date.split('-')[0];
-        if (yr !== selectedYear) return false;
-      }
-      if (selectedMonth) {
-        const mo = d.date.split('-')[1];
-        if (mo !== selectedMonth) return false;
-      }
-      if (selectedCategory && d.category !== selectedCategory && d.purpose !== selectedCategory) {
-        return false;
-      }
-      if (selectedMahfil && d.mahfilId !== selectedMahfil) return false;
-      return true;
-    });
+    if (selectedYear) {
+      f.year = selectedYear;
+    }
+    if (selectedMonth) {
+      f.month = selectedMonth;
+    }
+
+    return f;
   }, [
-    donations,
-    search,
+    page,
+    pageSize,
+    debouncedSearch,
     datePreset,
-    startDate,
-    endDate,
     todayStr,
     currentYearStr,
     currentMonthStr,
-    selectedYear,
-    selectedMonth,
+    startDate,
+    endDate,
     selectedCategory,
     selectedMahfil,
+    selectedYear,
+    selectedMonth,
+    selectedPaymentMethod,
   ]);
 
-  // Safely calculate total amount from filtered records
-  const totalAmount = useMemo(() => {
-    return filteredDonations.reduce((sum, d) => sum + d.amount, 0);
-  }, [filteredDonations]);
+  // Track parent donations length/reference so after mutation we reload
+  const prevDonationsLengthRef = useRef(donations.length);
+
+  // Fetch paginated data from database
+  const loadDonations = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await databaseService.getDonationsPaginated(queryFilters);
+      setPageDonations(result.data);
+      setTotalCount(result.totalCount);
+      setTotalAmount(result.totalAmount || 0);
+      setError(null);
+    } catch (err: any) {
+      console.error('Error in loadDonations:', err);
+      setError(err?.message || 'ডাটাবেস থেকে হাদিয়ার তালিকা লোড করা যায়নি');
+      setPageDonations([]);
+      setTotalCount(0);
+      setTotalAmount(0);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [queryFilters]);
+
+  // Execute database query when queryFilters change
+  useEffect(() => {
+    loadDonations();
+  }, [loadDonations]);
+
+  // When donations array from parent updates (e.g. after add/edit/delete), reload
+  useEffect(() => {
+    if (prevDonationsLengthRef.current !== donations.length) {
+      prevDonationsLengthRef.current = donations.length;
+      loadDonations();
+    }
+  }, [donations, loadDonations]);
 
   const clearAllFilters = () => {
     setSearch('');
+    setDebouncedSearch('');
     setDatePreset('all');
     setStartDate('');
     setEndDate('');
@@ -140,6 +193,8 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
     setSelectedMahfil('');
     setSelectedYear('');
     setSelectedMonth('');
+    setSelectedPaymentMethod('');
+    setPage(1);
   };
 
   const hasActiveFilters = Boolean(
@@ -150,36 +205,50 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
       selectedCategory ||
       selectedMahfil ||
       selectedYear ||
-      selectedMonth
+      selectedMonth ||
+      selectedPaymentMethod
   );
 
-  const handleExportCSV = () => {
-    const exportRows = filteredDonations.map((d) => {
-      const mahfil = mahfils.find((m) => m.id === d.mahfilId);
-      return {
-        donorName: d.donorName,
-        phone: d.phone || d.mobileNumber || '-',
-        amount: d.amount,
-        date: d.date,
-        category: d.purpose || d.category,
-        mahfil: mahfil ? mahfil.name : 'সাধারণ',
-        paymentMethod: getPaymentMethodLabel(d.paymentMethod),
-        notes: d.notes || '-',
-        createdBy: d.createdBy || '-',
-      };
-    });
+  const handleExportCSV = async () => {
+    try {
+      setIsExporting(true);
+      const exportResult = await databaseService.getDonationsPaginated({
+        ...queryFilters,
+        page: 1,
+        pageSize: 5000,
+      });
 
-    exportToCSV('donations_report', exportRows, [
-      { key: 'donorName', label: 'দানকারীর নাম' },
-      { key: 'phone', label: 'মোবাইল নম্বর' },
-      { key: 'amount', label: 'টাকার পরিমাণ (৳)' },
-      { key: 'date', label: 'তারিখ' },
-      { key: 'category', label: 'খাত' },
-      { key: 'mahfil', label: 'মাহফিল' },
-      { key: 'paymentMethod', label: 'পরিশোধ মাধ্যম' },
-      { key: 'notes', label: 'মন্তব্য' },
-      { key: 'createdBy', label: 'নথিভুক্তকারী' },
-    ]);
+      const exportRows = exportResult.data.map((d) => {
+        const mahfil = mahfils.find((m) => m.id === d.mahfilId);
+        return {
+          donorName: d.donorName,
+          phone: d.phone || d.mobileNumber || '-',
+          amount: d.amount,
+          date: d.date,
+          category: d.purpose || d.category,
+          mahfil: mahfil ? mahfil.name : 'সাধারণ',
+          paymentMethod: getPaymentMethodLabel(d.paymentMethod),
+          notes: d.notes || '-',
+          createdBy: d.createdBy || '-',
+        };
+      });
+
+      exportToCSV('donations_report', exportRows, [
+        { key: 'donorName', label: 'দানকারীর নাম' },
+        { key: 'phone', label: 'মোবাইল নম্বর' },
+        { key: 'amount', label: 'টাকার পরিমাণ (৳)' },
+        { key: 'date', label: 'তারিখ' },
+        { key: 'category', label: 'খাত' },
+        { key: 'mahfil', label: 'মাহফিল' },
+        { key: 'paymentMethod', label: 'পরিশোধ মাধ্যম' },
+        { key: 'notes', label: 'মন্তব্য' },
+        { key: 'createdBy', label: 'নথিভুক্তকারী' },
+      ]);
+    } catch (err) {
+      console.error('Export CSV failed:', err);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -196,14 +265,15 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {filteredDonations.length > 0 && (
+          {totalCount > 0 && (
             <button
               type="button"
               onClick={handleExportCSV}
-              className="inline-flex items-center justify-center gap-1.5 h-10 px-3 text-xs sm:text-sm font-medium text-stone-700 bg-white border border-stone-200 hover:bg-stone-50 rounded-lg cursor-pointer transition-colors shadow-xs"
+              disabled={isExporting}
+              className="inline-flex items-center justify-center gap-1.5 h-10 px-3 text-xs sm:text-sm font-medium text-stone-700 bg-white border border-stone-200 hover:bg-stone-50 rounded-lg cursor-pointer transition-colors shadow-xs disabled:opacity-50"
             >
               <Download className="w-4 h-4 text-stone-500" />
-              <span>CSV রপ্তানি</span>
+              <span>{isExporting ? 'রপ্তানি হচ্ছে...' : 'CSV রপ্তানি'}</span>
             </button>
           )}
 
@@ -220,18 +290,29 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         </div>
       </div>
 
-      {/* Summary Banner for filtered total */}
+      {/* Summary Banner for filtered total from database */}
       <div className="bg-emerald-900 text-white rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
         <div>
           <span className="text-xs text-emerald-200 font-medium">
             বর্তমান ফিল্টারে মোট সংগৃহীত হাদিয়া
           </span>
-          <div className="text-2xl sm:text-3xl font-bold mt-0.5 tracking-tight text-white">
-            {formatCurrency(totalAmount)}
+          <div className="text-2xl sm:text-3xl font-bold mt-0.5 tracking-tight text-white flex items-center gap-2">
+            {isLoading ? (
+              <span className="text-emerald-200 text-lg sm:text-xl font-normal flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-emerald-300 border-t-transparent rounded-full animate-spin" />
+                হিসাব লোড হচ্ছে...
+              </span>
+            ) : (
+              formatCurrency(totalAmount)
+            )}
           </div>
         </div>
         <div className="text-xs sm:text-sm text-emerald-200 bg-emerald-800/80 px-3 py-1.5 rounded-lg border border-emerald-700 self-start sm:self-auto">
-          মোট রেকর্ড: <strong className="text-white">{toBengaliNumber(filteredDonations.length)}</strong> টি
+          মোট রেকর্ড:{' '}
+          <strong className="text-white">
+            {isLoading ? '...' : toBengaliNumber(totalCount)}
+          </strong>{' '}
+          টি
         </div>
       </div>
 
@@ -239,7 +320,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
         <button
           type="button"
-          onClick={() => setDatePreset('all')}
+          onClick={() => {
+            setDatePreset('all');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'all'
               ? 'bg-emerald-800 text-white shadow-xs'
@@ -250,7 +334,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('today')}
+          onClick={() => {
+            setDatePreset('today');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'today'
               ? 'bg-emerald-800 text-white shadow-xs'
@@ -261,7 +348,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('this_month')}
+          onClick={() => {
+            setDatePreset('this_month');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'this_month'
               ? 'bg-emerald-800 text-white shadow-xs'
@@ -272,7 +362,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('this_year')}
+          onClick={() => {
+            setDatePreset('this_year');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'this_year'
               ? 'bg-emerald-800 text-white shadow-xs'
@@ -283,7 +376,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('custom')}
+          onClick={() => {
+            setDatePreset('custom');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 inline-flex items-center gap-1 ${
             datePreset === 'custom'
               ? 'bg-emerald-800 text-white shadow-xs'
@@ -304,7 +400,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
             <input
               type="date"
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              onChange={(e) => {
+                setStartDate(e.target.value);
+                setPage(1);
+              }}
               className="h-8 px-2 bg-white border border-stone-300 rounded-md text-stone-800"
             />
           </div>
@@ -313,7 +412,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
             <input
               type="date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
+              onChange={(e) => {
+                setEndDate(e.target.value);
+                setPage(1);
+              }}
               className="h-8 px-2 bg-white border border-stone-300 rounded-md text-stone-800"
             />
           </div>
@@ -323,7 +425,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
       {/* Search and Advanced Filters */}
       <div className="bg-white rounded-xl border border-stone-200/90 p-3 sm:p-4 space-y-3 shadow-xs">
         <div className="flex items-center gap-2">
-          {/* Search Box */}
+          {/* Database-side Search Box */}
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
             <input
@@ -355,7 +457,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
 
         {/* Collapsible filter controls */}
         {showFilters && (
-          <div className="pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div className="pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
             {/* Year */}
             <div>
               <label className="block text-[11px] font-semibold text-stone-600 mb-1">
@@ -363,7 +465,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
               </label>
               <select
                 value={selectedYear}
-                onChange={(e) => setSelectedYear(e.target.value)}
+                onChange={(e) => {
+                  setSelectedYear(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল বছর</option>
@@ -382,7 +487,10 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
               </label>
               <select
                 value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
+                onChange={(e) => {
+                  setSelectedMonth(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল মাস</option>
@@ -397,14 +505,17 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
               </select>
             </div>
 
-            {/* Category */}
+            {/* Category / Purpose */}
             <div>
               <label className="block text-[11px] font-semibold text-stone-600 mb-1">
                 খাত / উদ্দেশ্য
               </label>
               <select
                 value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
+                onChange={(e) => {
+                  setSelectedCategory(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল খাত</option>
@@ -423,13 +534,38 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
               </label>
               <select
                 value={selectedMahfil}
-                onChange={(e) => setSelectedMahfil(e.target.value)}
+                onChange={(e) => {
+                  setSelectedMahfil(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল মাহফিল</option>
                 {mahfils.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Payment Method Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold text-stone-600 mb-1">
+                পরিশোধ মাধ্যম
+              </label>
+              <select
+                value={selectedPaymentMethod}
+                onChange={(e) => {
+                  setSelectedPaymentMethod(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
+              >
+                <option value="">সকল মাধ্যম</option>
+                {PAYMENT_METHODS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
                   </option>
                 ))}
               </select>
@@ -453,8 +589,36 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         )}
       </div>
 
-      {/* Main Donation List */}
-      {filteredDonations.length === 0 ? (
+      {/* Main Donation List Area */}
+      {isLoading ? (
+        <div className="bg-white rounded-xl border border-stone-200/90 p-12 text-center shadow-xs flex flex-col items-center justify-center space-y-3 min-h-[300px]">
+          <div className="w-10 h-10 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+          <h3 className="text-base font-bold text-stone-800">
+            লোড হচ্ছে...
+          </h3>
+          <p className="text-xs text-stone-500 max-w-md">
+            ডাটাবেস থেকে হাদিয়ার রেকর্ড লোড করা হচ্ছে
+          </p>
+        </div>
+      ) : error ? (
+        <div className="bg-rose-50/90 rounded-xl border border-rose-200 p-8 text-center shadow-xs flex flex-col items-center justify-center space-y-3 min-h-[220px]">
+          <AlertTriangle className="w-8 h-8 text-rose-600" />
+          <h3 className="text-base font-bold text-rose-900">
+            হিসাব লোড করা যাচ্ছে না। আবার চেষ্টা করুন।
+          </h3>
+          <p className="text-xs text-rose-700 max-w-md leading-relaxed">
+            {error}
+          </p>
+          <button
+            type="button"
+            onClick={loadDonations}
+            className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>আবার চেষ্টা করুন</span>
+          </button>
+        </div>
+      ) : pageDonations.length === 0 ? (
         <EmptyState
           title={hasActiveFilters ? 'কোনো হাদিয়া পাওয়া যায়নি' : 'এখনো কোনো হিসাব যোগ করা হয়নি'}
           description={
@@ -469,7 +633,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
         <>
           {/* Mobile Card View (hidden on lg) */}
           <div className="block lg:hidden space-y-3">
-            {filteredDonations.map((d) => {
+            {pageDonations.map((d) => {
               const mahfil = mahfils.find((m) => m.id === d.mahfilId);
               return (
                 <div
@@ -521,7 +685,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                     <button
                       type="button"
                       onClick={() => onViewDonation(d)}
-                      className="min-h-[40px] px-3 text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                      className="min-h-[42px] px-3.5 text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg inline-flex items-center gap-1 cursor-pointer"
                     >
                       <Eye className="w-3.5 h-3.5" /> বিবরণ
                     </button>
@@ -529,7 +693,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                       <button
                         type="button"
                         onClick={() => onEditDonation(d)}
-                        className="min-h-[40px] px-3 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                        className="min-h-[42px] px-3.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
                       >
                         <Edit2 className="w-3.5 h-3.5" /> সম্পাদন
                       </button>
@@ -538,7 +702,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeleteDonation(d.id, d.donorName)}
-                        className="min-h-[40px] px-3 text-xs font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                        className="min-h-[42px] px-3.5 text-xs font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" /> মুছুন
                       </button>
@@ -565,7 +729,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
-                  {filteredDonations.map((d) => {
+                  {pageDonations.map((d) => {
                     const mahfil = mahfils.find((m) => m.id === d.mahfilId);
                     return (
                       <tr key={d.id} className="hover:bg-stone-50/70 transition-colors">
@@ -596,7 +760,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                               type="button"
                               onClick={() => onViewDonation(d)}
                               title="বিবরণ দেখুন"
-                              className="p-1.5 text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-md transition-colors cursor-pointer"
+                              className="p-2 text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-md transition-colors cursor-pointer"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
@@ -605,7 +769,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                                 type="button"
                                 onClick={() => onEditDonation(d)}
                                 title="সম্পাদনা করুন"
-                                className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                className="p-2 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
                               >
                                 <Edit2 className="w-4 h-4" />
                               </button>
@@ -615,7 +779,7 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
                                 type="button"
                                 onClick={() => onDeleteDonation(d.id, d.donorName)}
                                 title="মুছে ফেলুন"
-                                className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                className="p-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -629,6 +793,18 @@ export const DonationsPage: React.FC<DonationsPageProps> = ({
               </table>
             </div>
           </div>
+
+          {/* Pagination Controls */}
+          <PaginationControls
+            page={page}
+            pageSize={pageSize}
+            totalCount={totalCount}
+            onPageChange={(newPage) => {
+              setPage(newPage);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            isLoading={isLoading}
+          />
         </>
       )}
     </div>

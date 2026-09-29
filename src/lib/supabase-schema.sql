@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- ৬. খরচের ক্যাটাগরি টেবিল (Expense Categories)
+CREATE TABLE IF NOT EXISTS public.expense_categories (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  is_active BOOLEAN DEFAULT true NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- ইনডেক্সিং (দ্রুত ফিল্টারিং এবং সার্চের জন্য)
 CREATE INDEX IF NOT EXISTS idx_donations_date ON public.donations(donation_date);
 CREATE INDEX IF NOT EXISTS idx_donations_purpose ON public.donations(purpose);
@@ -79,6 +88,8 @@ CREATE INDEX IF NOT EXISTS idx_donations_mahfil ON public.donations(mahfil_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses(expense_date);
 CREATE INDEX IF NOT EXISTS idx_expenses_category ON public.expenses(category);
 CREATE INDEX IF NOT EXISTS idx_expenses_mahfil ON public.expenses(mahfil_id);
+CREATE INDEX IF NOT EXISTS idx_expense_categories_name ON public.expense_categories(name);
+CREATE INDEX IF NOT EXISTS idx_expense_categories_is_active ON public.expense_categories(is_active);
 CREATE INDEX IF NOT EXISTS idx_members_name ON public.members(name);
 CREATE INDEX IF NOT EXISTS idx_mahfils_date ON public.mahfils(event_date);
 
@@ -91,6 +102,7 @@ ALTER TABLE public.members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.mahfils ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.donations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.expense_categories ENABLE ROW LEVEL SECURITY;
 
 -- সহায়ক ফাংশন: বর্তমান ইউজারের রোল চেক
 CREATE OR REPLACE FUNCTION public.get_user_role()
@@ -110,6 +122,9 @@ CREATE POLICY "Allow authenticated read on donations"
 
 CREATE POLICY "Allow authenticated read on expenses"
   ON public.expenses FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "Allow authenticated read on expense_categories"
+  ON public.expense_categories FOR SELECT TO authenticated USING (true);
 
 -- নিরাপদ রিড-অনলি পাবলিক পলিসি (Secure Read-Only Access for Public View)
 -- শুধুমাত্র পাবলিক ভিউয়ের জন্য SELECT অনুমোদন, কোনো INSERT/UPDATE/DELETE নয়
@@ -196,3 +211,183 @@ CREATE POLICY "Allow admin delete on mahfils"
 CREATE POLICY "Allow admin delete on members"
   ON public.members FOR DELETE TO authenticated
   USING (public.get_user_role() = 'admin');
+
+-- খরচের ক্যাটাগরি শুধুমাত্র অ্যাডমিন তৈরি, সম্পাদন ও ডিলিট করতে পারবে
+CREATE POLICY "Allow admin insert on expense_categories"
+  ON public.expense_categories FOR INSERT TO authenticated
+  WITH CHECK (public.get_user_role() = 'admin');
+
+CREATE POLICY "Allow admin update on expense_categories"
+  ON public.expense_categories FOR UPDATE TO authenticated
+  USING (public.get_user_role() = 'admin');
+
+CREATE POLICY "Allow admin delete on expense_categories"
+  ON public.expense_categories FOR DELETE TO authenticated
+  USING (public.get_user_role() = 'admin');
+
+-- =========================================================================
+-- ৭. পাবলিক ভিউ ডিজাইন ও থিম সেটিংস টেবিল (Public View Theme Settings)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.public_view_settings (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  org_name TEXT NOT NULL DEFAULT 'আশেকানে গাউছিয়া',
+  subtitle TEXT NOT NULL DEFAULT 'হাদিয়া, মাহফিল ও আয়-ব্যয়ের হিসাব',
+  welcome_message TEXT NOT NULL DEFAULT 'আসসালামু আলাইকুম, আপনাকে স্বাগতম',
+  logo_url TEXT DEFAULT '',
+  theme_id TEXT NOT NULL DEFAULT 'classic',
+  accent_color TEXT NOT NULL DEFAULT '#047857',
+  header_style TEXT NOT NULL DEFAULT 'gradient',
+  footer_text TEXT NOT NULL DEFAULT '© আশেকানে গাউছিয়া। সর্বস্বত্ব সংরক্ষিত।',
+  updated_by TEXT,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- প্রাথমিক ডিফল্ট সেটিংস রেকর্ড ইনসার্ট (যদি না থাকে)
+INSERT INTO public.public_view_settings (id, org_name, subtitle, welcome_message, logo_url, theme_id, accent_color, header_style, footer_text)
+VALUES ('default', 'আশেকানে গাউছিয়া', 'হাদিয়া, মাহফিল ও আয়-ব্যয়ের হিসাব', 'আসসালামু আলাইকুম, আপনাকে স্বাগতম', '', 'classic', '#047857', 'gradient', '© আশেকানে গাউছিয়া। সর্বস্বত্ব সংরক্ষিত।')
+ON CONFLICT (id) DO NOTHING;
+
+-- RLS পলিসি এনাবলকরণ
+ALTER TABLE public.public_view_settings ENABLE ROW LEVEL SECURITY;
+
+-- নিরাপদ রিড-অনলি এক্সেস: সাধারণ দর্শনার্থী ও অথেনটিকেটেড যে কেউ পাবলিক থিম পড়তে পারবে
+CREATE POLICY "Allow public read-only on public_view_settings"
+  ON public.public_view_settings FOR SELECT TO anon, authenticated
+  USING (true);
+
+-- শুধুমাত্র প্রধান অ্যাডমিন থিম সেটিংস তৈরি ও সম্পাদন করতে পারবে
+CREATE POLICY "Allow admin insert on public_view_settings"
+  ON public.public_view_settings FOR INSERT TO authenticated
+  WITH CHECK (public.get_user_role() = 'admin');
+
+CREATE POLICY "Allow admin update on public_view_settings"
+  ON public.public_view_settings FOR UPDATE TO authenticated
+  USING (public.get_user_role() = 'admin');
+
+CREATE POLICY "Allow admin delete on public_view_settings"
+  ON public.public_view_settings FOR DELETE TO authenticated
+  USING (public.get_user_role() = 'admin');
+
+-- =========================================================================
+-- ৮. পাবলিক সামারি আরপিসি ফাংশন (get_public_summary RPC)
+-- =========================================================================
+CREATE OR REPLACE FUNCTION public.get_public_summary()
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_member_count int;
+  v_current_month_income numeric;
+  v_current_month_expense numeric;
+  v_current_year_income numeric;
+  v_current_year_expense numeric;
+  v_upcoming_mahfils json;
+  v_mahfil_summary json;
+  v_monthly_summary json;
+  v_cur_year text := to_char(now(), 'YYYY');
+  v_cur_month text := to_char(now(), 'YYYY-MM');
+BEGIN
+  -- ১. সক্রিয় সদস্য সংখ্যা
+  SELECT count(*) INTO v_member_count FROM public.members WHERE is_active = true;
+
+  -- ২. চলতি মাসের আয় ও ব্যয়
+  SELECT coalesce(sum(amount), 0) INTO v_current_month_income
+  FROM public.donations
+  WHERE to_char(donation_date, 'YYYY-MM') = v_cur_month;
+
+  SELECT coalesce(sum(amount), 0) INTO v_current_month_expense
+  FROM public.expenses
+  WHERE to_char(expense_date, 'YYYY-MM') = v_cur_month;
+
+  -- ৩. চলতি বছরের আয় ও ব্যয়
+  SELECT coalesce(sum(amount), 0) INTO v_current_year_income
+  FROM public.donations
+  WHERE to_char(donation_date, 'YYYY') = v_cur_year;
+
+  SELECT coalesce(sum(amount), 0) INTO v_current_year_expense
+  FROM public.expenses
+  WHERE to_char(expense_date, 'YYYY') = v_cur_year;
+
+  -- ৪. আসন্ন মাহফিলসমূহ
+  SELECT coalesce(json_agg(t), '[]'::json) INTO v_upcoming_mahfils
+  FROM (
+    SELECT id, name, event_date, location, description
+    FROM public.mahfils
+    WHERE event_date >= current_date
+    ORDER BY event_date ASC
+    LIMIT 5
+  ) t;
+
+  -- ৫. মাহফিল ভিত্তিক আর্থিক খতিয়ান
+  SELECT coalesce(json_agg(t), '[]'::json) INTO v_mahfil_summary
+  FROM (
+    SELECT 
+      m.id,
+      m.name,
+      m.event_date,
+      m.location,
+      coalesce(sum(d.amount), 0) AS income,
+      coalesce((SELECT coalesce(sum(e.amount), 0) FROM public.expenses e WHERE e.mahfil_id = m.id), 0) AS expense,
+      coalesce(sum(d.amount), 0) - coalesce((SELECT coalesce(sum(e.amount), 0) FROM public.expenses e WHERE e.mahfil_id = m.id), 0) AS balance
+    FROM public.mahfils m
+    LEFT JOIN public.donations d ON d.mahfil_id = m.id
+    GROUP BY m.id, m.name, m.event_date, m.location
+    ORDER BY m.event_date DESC
+    LIMIT 10
+  ) t;
+
+  -- ৬. চলতি বছরের ১২ মাসের আয়-ব্যয়ের খতিয়ান
+  SELECT coalesce(json_agg(t), '[]'::json) INTO v_monthly_summary
+  FROM (
+    SELECT 
+      m_series.m AS month,
+      coalesce((
+        SELECT sum(amount) 
+        FROM public.donations 
+        WHERE extract(year FROM donation_date) = extract(year FROM now())
+          AND extract(month FROM donation_date) = m_series.m
+      ), 0) AS income,
+      coalesce((
+        SELECT sum(amount) 
+        FROM public.expenses 
+        WHERE extract(year FROM expense_date) = extract(year FROM now())
+          AND extract(month FROM expense_date) = m_series.m
+      ), 0) AS expense,
+      coalesce((
+        SELECT sum(amount) 
+        FROM public.donations 
+        WHERE extract(year FROM donation_date) = extract(year FROM now())
+          AND extract(month FROM donation_date) = m_series.m
+      ), 0) - coalesce((
+        SELECT sum(amount) 
+        FROM public.expenses 
+        WHERE extract(year FROM expense_date) = extract(year FROM now())
+          AND extract(month FROM expense_date) = m_series.m
+      ), 0) AS balance
+    FROM generate_series(1, 12) AS m_series(m)
+    ORDER BY m_series.m ASC
+  ) t;
+
+  RETURN json_build_object(
+    'member_count', v_member_count,
+    'current_month', json_build_object(
+      'income', v_current_month_income,
+      'expense', v_current_month_expense,
+      'balance', v_current_month_income - v_current_month_expense
+    ),
+    'current_year', json_build_object(
+      'income', v_current_year_income,
+      'expense', v_current_year_expense,
+      'balance', v_current_year_income - v_current_year_expense
+    ),
+    'upcoming_mahfils', v_upcoming_mahfils,
+    'mahfil_summary', v_mahfil_summary,
+    'yearly_monthly_summary', v_monthly_summary
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_public_summary() TO anon, authenticated;
+
+

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Modal } from '../common/Modal';
-import { Expense, Mahfil, PaymentMethod } from '../../types/database.types';
+import { Expense, ExpenseCategory, Mahfil, PaymentMethod } from '../../types/database.types';
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS } from '../../utils/formatters';
 
 interface ExpenseFormModalProps {
@@ -10,6 +10,7 @@ interface ExpenseFormModalProps {
   initialData?: Expense | null;
   mahfils: Mahfil[];
   currentUserName: string;
+  categories?: ExpenseCategory[];
 }
 
 export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
@@ -19,10 +20,38 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
   initialData,
   mahfils,
   currentUserName,
+  categories = [],
 }) => {
+  // Active categories from ExpenseCategory management
+  const activeCategories = useMemo(() => {
+    return (categories || []).filter((c) => c.isActive);
+  }, [categories]);
+
+  // Combined options: active categories or fallback to EXPENSE_CATEGORIES if none configured
+  const categoryOptions = useMemo(() => {
+    let options: { id: string; label: string }[] = [];
+    if (activeCategories.length > 0) {
+      options = activeCategories.map((c) => ({ id: c.name, label: c.name }));
+    } else {
+      options = EXPENSE_CATEGORIES.map((c) => ({ id: c.id, label: c.label }));
+    }
+
+    // If editing existing expense and its category is not in the active options, preserve it!
+    if (initialData?.category && !options.some((opt) => opt.id === initialData.category)) {
+      options.unshift({
+        id: initialData.category,
+        label: `${initialData.category} (ঐতিহাসিক/নিষ্ক্রিয়)`,
+      });
+    }
+
+    return options;
+  }, [activeCategories, initialData?.category]);
+
+  const defaultCat = categoryOptions[0]?.id || 'সাধারণ খরচ';
+
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [category, setCategory] = useState(EXPENSE_CATEGORIES[0].id);
+  const [category, setCategory] = useState(defaultCat);
   const [amount, setAmount] = useState<string>('');
   const [recipient, setRecipient] = useState('');
   const [mahfilId, setMahfilId] = useState('');
@@ -48,7 +77,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
     } else {
       setTitle('');
       setDate(new Date().toISOString().split('T')[0]);
-      setCategory(EXPENSE_CATEGORIES[0].id);
+      setCategory(categoryOptions[0]?.id || 'সাধারণ খরচ');
       setAmount('');
       setRecipient('');
       setMahfilId('');
@@ -58,7 +87,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
       setCreatedBy(currentUserName);
     }
     setErrorMsg('');
-  }, [initialData, isOpen, currentUserName]);
+  }, [initialData, isOpen, currentUserName, categoryOptions]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,7 +172,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               onChange={(e) => setCategory(e.target.value)}
               className="w-full h-11 px-3 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:border-transparent cursor-pointer"
             >
-              {EXPENSE_CATEGORIES.map((c) => (
+              {categoryOptions.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.label}
                 </option>

@@ -1,10 +1,11 @@
-import React, { useState, useMemo } from 'react';
-import { Expense, Mahfil } from '../types/database.types';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { Expense, ExpenseCategory, Mahfil, UserRole } from '../types/database.types';
 import {
   formatCurrency,
   formatBengaliDate,
   getPaymentMethodLabel,
   EXPENSE_CATEGORIES,
+  PAYMENT_METHODS,
   BENGALI_MONTHS,
   toBengaliNumber,
 } from '../utils/formatters';
@@ -18,9 +19,15 @@ import {
   Download,
   Calendar,
   X,
+  AlertTriangle,
+  RefreshCw,
+  Tags,
 } from 'lucide-react';
 import { EmptyState } from '../components/common/EmptyState';
+import { PaginationControls } from '../components/common/PaginationControls';
 import { exportToCSV } from '../utils/exportHelpers';
+import { databaseService, ExpenseFilterOptions } from '../services/databaseService';
+import { ExpenseCategoryModal } from '../components/expenses/ExpenseCategoryModal';
 
 interface ExpensesPageProps {
   expenses: Expense[];
@@ -32,6 +39,11 @@ interface ExpensesPageProps {
   canEdit: boolean;
   canDelete: boolean;
   isPublicGuest?: boolean;
+  currentRole?: UserRole;
+  categories?: ExpenseCategory[];
+  onAddCategory?: (name: string) => Promise<any>;
+  onUpdateCategory?: (id: string, name: string) => Promise<any>;
+  onToggleCategoryActive?: (id: string, isActive: boolean) => Promise<any>;
 }
 
 type DatePreset = 'all' | 'today' | 'this_month' | 'this_year' | 'custom';
@@ -46,8 +58,18 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
   canEdit,
   canDelete,
   isPublicGuest = false,
+  currentRole = 'viewer',
+  categories = [],
+  onAddCategory,
+  onUpdateCategory,
+  onToggleCategoryActive,
 }) => {
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  // Query & Filter States
+  const [page, setPage] = useState<number>(1);
+  const pageSize = 20;
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -55,14 +77,32 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
   const [selectedMahfil, setSelectedMahfil] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Paginated data state
+  const [pageExpenses, setPageExpenses] = useState<Expense[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalExpense, setTotalExpense] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [currentYearStr, currentMonthStr] = useMemo(() => todayStr.split('-'), [todayStr]);
 
+  // Debounce search input by 350ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const availableYears = useMemo(() => {
     const currentYear = new Date().getFullYear();
-    const set = new Set<string>([String(currentYear), String(currentYear - 1)]);
+    const set = new Set<string>([String(currentYear), String(currentYear - 1), String(currentYear - 2)]);
     expenses.forEach((e) => {
       const yr = e.date.split('-')[0];
       if (yr) set.add(yr);
@@ -70,65 +110,121 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
     return Array.from(set).sort().reverse();
   }, [expenses]);
 
-  const filteredExpenses = useMemo(() => {
-    return expenses.filter((e) => {
-      if (search) {
-        const q = search.toLowerCase().trim();
-        const matchesTitle = (e.title || '').toLowerCase().includes(q);
-        const matchesRecipient = (e.recipient || e.paidTo || '').toLowerCase().includes(q);
-        const matchesNotes = (e.notes || '').toLowerCase().includes(q);
-        const matchesDesc = (e.description || '').toLowerCase().includes(q);
-        const matchesCategory = (e.category || '').toLowerCase().includes(q);
-        if (!matchesTitle && !matchesRecipient && !matchesNotes && !matchesDesc && !matchesCategory) {
-          return false;
-        }
-      }
+  // Dynamic categories for filtering (combines configured categories, defaults and historical expenses)
+  const filterCategories = useMemo(() => {
+    const list: string[] = [];
+    const seen = new Set<string>();
 
-      // Date Preset Filtering
-      if (datePreset === 'today') {
-        if (e.date !== todayStr) return false;
-      } else if (datePreset === 'this_month') {
-        if (!e.date.startsWith(`${currentYearStr}-${currentMonthStr}`)) return false;
-      } else if (datePreset === 'this_year') {
-        if (!e.date.startsWith(`${currentYearStr}-`)) return false;
-      } else if (datePreset === 'custom') {
-        if (startDate && e.date < startDate) return false;
-        if (endDate && e.date > endDate) return false;
+    (categories || []).forEach((c) => {
+      const name = c.name.trim();
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        list.push(name);
       }
-
-      if (selectedYear) {
-        const yr = e.date.split('-')[0];
-        if (yr !== selectedYear) return false;
-      }
-      if (selectedMonth) {
-        const mo = e.date.split('-')[1];
-        if (mo !== selectedMonth) return false;
-      }
-      if (selectedCategory && e.category !== selectedCategory) return false;
-      if (selectedMahfil && e.mahfilId !== selectedMahfil) return false;
-      return true;
     });
+
+    EXPENSE_CATEGORIES.forEach((c) => {
+      if (!seen.has(c.id)) {
+        seen.add(c.id);
+        list.push(c.id);
+      }
+    });
+
+    expenses.forEach((e) => {
+      const cat = (e.category || '').trim();
+      if (cat && !seen.has(cat)) {
+        seen.add(cat);
+        list.push(cat);
+      }
+    });
+
+    return list;
+  }, [categories, expenses]);
+
+  // Build query filter options
+  const queryFilters = useMemo((): ExpenseFilterOptions => {
+    const f: ExpenseFilterOptions = {
+      page,
+      pageSize,
+      search: debouncedSearch || undefined,
+      category: selectedCategory || undefined,
+      mahfilId: selectedMahfil || undefined,
+      paymentMethod: selectedPaymentMethod || undefined,
+    };
+
+    if (datePreset === 'today') {
+      f.date = todayStr;
+    } else if (datePreset === 'this_month') {
+      f.year = currentYearStr;
+      f.month = currentMonthStr;
+    } else if (datePreset === 'this_year') {
+      f.year = currentYearStr;
+    } else if (datePreset === 'custom') {
+      f.startDate = startDate || undefined;
+      f.endDate = endDate || undefined;
+    }
+
+    if (selectedYear) {
+      f.year = selectedYear;
+    }
+    if (selectedMonth) {
+      f.month = selectedMonth;
+    }
+
+    return f;
   }, [
-    expenses,
-    search,
+    page,
+    pageSize,
+    debouncedSearch,
     datePreset,
-    startDate,
-    endDate,
     todayStr,
     currentYearStr,
     currentMonthStr,
-    selectedYear,
-    selectedMonth,
+    startDate,
+    endDate,
     selectedCategory,
     selectedMahfil,
+    selectedYear,
+    selectedMonth,
+    selectedPaymentMethod,
   ]);
 
-  const totalExpense = useMemo(() => {
-    return filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-  }, [filteredExpenses]);
+  const prevExpensesLengthRef = useRef(expenses.length);
+
+  const loadExpenses = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await databaseService.getExpensesPaginated(queryFilters);
+      setPageExpenses(result.data);
+      setTotalCount(result.totalCount);
+      setTotalExpense(result.totalAmount || 0);
+      setError(null);
+    } catch (err: any) {
+      console.error('Error in loadExpenses:', err);
+      setError(err?.message || 'ডাটাবেস থেকে খরচের তালিকা লোড করা যায়নি');
+      setPageExpenses([]);
+      setTotalCount(0);
+      setTotalExpense(0);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [queryFilters]);
+
+  useEffect(() => {
+    loadExpenses();
+  }, [loadExpenses]);
+
+  useEffect(() => {
+    if (prevExpensesLengthRef.current !== expenses.length) {
+      prevExpensesLengthRef.current = expenses.length;
+      loadExpenses();
+    }
+  }, [expenses, loadExpenses]);
 
   const clearAllFilters = () => {
     setSearch('');
+    setDebouncedSearch('');
     setDatePreset('all');
     setStartDate('');
     setEndDate('');
@@ -136,6 +232,8 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
     setSelectedMahfil('');
     setSelectedYear('');
     setSelectedMonth('');
+    setSelectedPaymentMethod('');
+    setPage(1);
   };
 
   const hasActiveFilters = Boolean(
@@ -146,38 +244,52 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
       selectedCategory ||
       selectedMahfil ||
       selectedYear ||
-      selectedMonth
+      selectedMonth ||
+      selectedPaymentMethod
   );
 
-  const handleExportCSV = () => {
-    const exportRows = filteredExpenses.map((e) => {
-      const mahfil = mahfils.find((m) => m.id === e.mahfilId);
-      return {
-        title: e.title,
-        recipient: e.recipient || e.paidTo,
-        amount: e.amount,
-        date: e.date,
-        category: e.category,
-        mahfil: mahfil ? mahfil.name : 'সাধারণ',
-        paymentMethod: getPaymentMethodLabel(e.paymentMethod),
-        description: e.description || '-',
-        notes: e.notes || '-',
-        createdBy: e.createdBy || '-',
-      };
-    });
+  const handleExportCSV = async () => {
+    try {
+      setIsExporting(true);
+      const exportResult = await databaseService.getExpensesPaginated({
+        ...queryFilters,
+        page: 1,
+        pageSize: 5000,
+      });
 
-    exportToCSV('expenses_report', exportRows, [
-      { key: 'title', label: 'খরচের বিষয়' },
-      { key: 'recipient', label: 'প্রাপক / ভেন্ডর' },
-      { key: 'amount', label: 'টাকার পরিমাণ (৳)' },
-      { key: 'date', label: 'তারিখ' },
-      { key: 'category', label: 'খাত' },
-      { key: 'mahfil', label: 'মাহফিল' },
-      { key: 'paymentMethod', label: 'পরিশোধ মাধ্যম' },
-      { key: 'description', label: 'বিবরণ' },
-      { key: 'notes', label: 'ভাউচার / মন্তব্য' },
-      { key: 'createdBy', label: 'নথিভুক্তকারী' },
-    ]);
+      const exportRows = exportResult.data.map((e) => {
+        const mahfil = mahfils.find((m) => m.id === e.mahfilId);
+        return {
+          title: e.title,
+          recipient: e.recipient || e.paidTo,
+          amount: e.amount,
+          date: e.date,
+          category: e.category,
+          mahfil: mahfil ? mahfil.name : 'সাধারণ',
+          paymentMethod: getPaymentMethodLabel(e.paymentMethod),
+          description: e.description || '-',
+          notes: e.notes || '-',
+          createdBy: e.createdBy || '-',
+        };
+      });
+
+      exportToCSV('expenses_report', exportRows, [
+        { key: 'title', label: 'খরচের বিষয়' },
+        { key: 'recipient', label: 'প্রাপক / ভেন্ডর' },
+        { key: 'amount', label: 'টাকার পরিমাণ (৳)' },
+        { key: 'date', label: 'তারিখ' },
+        { key: 'category', label: 'খাত' },
+        { key: 'mahfil', label: 'মাহফিল' },
+        { key: 'paymentMethod', label: 'পরিশোধ মাধ্যম' },
+        { key: 'description', label: 'বিবরণ' },
+        { key: 'notes', label: 'ভাউচার / মন্তব্য' },
+        { key: 'createdBy', label: 'নথিভুক্তকারী' },
+      ]);
+    } catch (err) {
+      console.error('Export CSV failed:', err);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -193,15 +305,27 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {filteredExpenses.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {totalCount > 0 && (
             <button
               type="button"
               onClick={handleExportCSV}
-              className="inline-flex items-center justify-center gap-1.5 h-10 px-3 text-xs sm:text-sm font-medium text-stone-700 bg-white border border-stone-200 hover:bg-stone-50 rounded-lg cursor-pointer transition-colors shadow-xs"
+              disabled={isExporting}
+              className="inline-flex items-center justify-center gap-1.5 h-10 px-3 text-xs sm:text-sm font-medium text-stone-700 bg-white border border-stone-200 hover:bg-stone-50 rounded-lg cursor-pointer transition-colors shadow-xs disabled:opacity-50"
             >
               <Download className="w-4 h-4 text-stone-500" />
-              <span>CSV রপ্তানি</span>
+              <span>{isExporting ? 'রপ্তানি হচ্ছে...' : 'CSV রপ্তানি'}</span>
+            </button>
+          )}
+
+          {currentRole === 'admin' && onAddCategory && onUpdateCategory && onToggleCategoryActive && (
+            <button
+              type="button"
+              onClick={() => setShowCategoryModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs sm:text-sm font-semibold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg shadow-xs cursor-pointer transition-colors"
+            >
+              <Tags className="w-4 h-4 text-rose-700" />
+              <span>খরচের ক্যাটাগরি</span>
             </button>
           )}
 
@@ -224,12 +348,23 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
           <span className="text-xs text-rose-200 font-medium">
             বর্তমান ফিল্টারে মোট ব্যয়ের পরিমাণ
           </span>
-          <div className="text-2xl sm:text-3xl font-bold mt-0.5 tracking-tight text-white">
-            {formatCurrency(totalExpense)}
+          <div className="text-2xl sm:text-3xl font-bold mt-0.5 tracking-tight text-white flex items-center gap-2">
+            {isLoading ? (
+              <span className="text-rose-200 text-lg sm:text-xl font-normal flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-rose-300 border-t-transparent rounded-full animate-spin" />
+                হিসাব লোড হচ্ছে...
+              </span>
+            ) : (
+              formatCurrency(totalExpense)
+            )}
           </div>
         </div>
         <div className="text-xs sm:text-sm text-rose-200 bg-rose-900/80 px-3 py-1.5 rounded-lg border border-rose-800 self-start sm:self-auto">
-          মোট খরচ রেকর্ড: <strong className="text-white">{toBengaliNumber(filteredExpenses.length)}</strong> টি
+          মোট খরচ রেকর্ড:{' '}
+          <strong className="text-white">
+            {isLoading ? '...' : toBengaliNumber(totalCount)}
+          </strong>{' '}
+          টি
         </div>
       </div>
 
@@ -237,7 +372,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
         <button
           type="button"
-          onClick={() => setDatePreset('all')}
+          onClick={() => {
+            setDatePreset('all');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'all'
               ? 'bg-rose-800 text-white shadow-xs'
@@ -248,7 +386,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('today')}
+          onClick={() => {
+            setDatePreset('today');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'today'
               ? 'bg-rose-800 text-white shadow-xs'
@@ -259,7 +400,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('this_month')}
+          onClick={() => {
+            setDatePreset('this_month');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'this_month'
               ? 'bg-rose-800 text-white shadow-xs'
@@ -270,7 +414,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('this_year')}
+          onClick={() => {
+            setDatePreset('this_year');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 ${
             datePreset === 'this_year'
               ? 'bg-rose-800 text-white shadow-xs'
@@ -281,7 +428,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         </button>
         <button
           type="button"
-          onClick={() => setDatePreset('custom')}
+          onClick={() => {
+            setDatePreset('custom');
+            setPage(1);
+          }}
           className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all shrink-0 inline-flex items-center gap-1 ${
             datePreset === 'custom'
               ? 'bg-rose-800 text-white shadow-xs'
@@ -302,7 +452,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
             <input
               type="date"
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              onChange={(e) => {
+                setStartDate(e.target.value);
+                setPage(1);
+              }}
               className="h-8 px-2 bg-white border border-stone-300 rounded-md text-stone-800"
             />
           </div>
@@ -311,7 +464,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
             <input
               type="date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
+              onChange={(e) => {
+                setEndDate(e.target.value);
+                setPage(1);
+              }}
               className="h-8 px-2 bg-white border border-stone-300 rounded-md text-stone-800"
             />
           </div>
@@ -328,7 +484,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="খরচের বিষয়, ভেন্ডর/প্রাপক বা ক্যাশমেমো দিয়ে খুঁজুন..."
+              placeholder="খরচের বিষয়, ভেন্ডর/প্রাপক বা খাত দিয়ে খুঁজুন..."
               className="w-full h-11 pl-9 pr-3 text-xs sm:text-sm bg-stone-50 border border-stone-200 rounded-lg text-stone-900 focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:border-transparent"
             />
           </div>
@@ -353,7 +509,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
 
         {/* Collapsible filter controls */}
         {showFilters && (
-          <div className="pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div className="pt-3 border-t border-stone-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
             {/* Year */}
             <div>
               <label className="block text-[11px] font-semibold text-stone-600 mb-1">
@@ -361,7 +517,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
               </label>
               <select
                 value={selectedYear}
-                onChange={(e) => setSelectedYear(e.target.value)}
+                onChange={(e) => {
+                  setSelectedYear(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল বছর</option>
@@ -380,7 +539,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
               </label>
               <select
                 value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
+                onChange={(e) => {
+                  setSelectedMonth(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল মাস</option>
@@ -402,13 +564,16 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
               </label>
               <select
                 value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
+                onChange={(e) => {
+                  setSelectedCategory(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল খাত</option>
-                {EXPENSE_CATEGORIES.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
+                {filterCategories.map((catName) => (
+                  <option key={catName} value={catName}>
+                    {catName}
                   </option>
                 ))}
               </select>
@@ -421,13 +586,38 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
               </label>
               <select
                 value={selectedMahfil}
-                onChange={(e) => setSelectedMahfil(e.target.value)}
+                onChange={(e) => {
+                  setSelectedMahfil(e.target.value);
+                  setPage(1);
+                }}
                 className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
               >
                 <option value="">সকল মাহফিল</option>
                 {mahfils.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Payment Method Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold text-stone-600 mb-1">
+                পরিশোধ মাধ্যম
+              </label>
+              <select
+                value={selectedPaymentMethod}
+                onChange={(e) => {
+                  setSelectedPaymentMethod(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full h-10 px-2.5 text-xs bg-stone-50 border border-stone-200 rounded-lg text-stone-800 cursor-pointer"
+              >
+                <option value="">সকল মাধ্যম</option>
+                {PAYMENT_METHODS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
                   </option>
                 ))}
               </select>
@@ -451,8 +641,36 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         )}
       </div>
 
-      {/* Main Expense List */}
-      {filteredExpenses.length === 0 ? (
+      {/* Main Expense List Area */}
+      {isLoading ? (
+        <div className="bg-white rounded-xl border border-stone-200/90 p-12 text-center shadow-xs flex flex-col items-center justify-center space-y-3 min-h-[300px]">
+          <div className="w-10 h-10 border-3 border-rose-600 border-t-transparent rounded-full animate-spin" />
+          <h3 className="text-base font-bold text-stone-800">
+            লোড হচ্ছে...
+          </h3>
+          <p className="text-xs text-stone-500 max-w-md">
+            ডাটাবেস থেকে খরচের রেকর্ড লোড করা হচ্ছে
+          </p>
+        </div>
+      ) : error ? (
+        <div className="bg-rose-50/90 rounded-xl border border-rose-200 p-8 text-center shadow-xs flex flex-col items-center justify-center space-y-3 min-h-[220px]">
+          <AlertTriangle className="w-8 h-8 text-rose-600" />
+          <h3 className="text-base font-bold text-rose-900">
+            হিসাব লোড করা যাচ্ছে না। আবার চেষ্টা করুন।
+          </h3>
+          <p className="text-xs text-rose-700 max-w-md leading-relaxed">
+            {error}
+          </p>
+          <button
+            type="button"
+            onClick={loadExpenses}
+            className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>আবার চেষ্টা করুন</span>
+          </button>
+        </div>
+      ) : pageExpenses.length === 0 ? (
         <EmptyState
           title={hasActiveFilters ? 'কোনো খরচ পাওয়া যায়নি' : 'এখনো কোনো হিসাব যোগ করা হয়নি'}
           description={
@@ -467,7 +685,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         <>
           {/* Mobile Card View */}
           <div className="block lg:hidden space-y-3">
-            {filteredExpenses.map((e) => {
+            {pageExpenses.map((e) => {
               const mahfil = mahfils.find((m) => m.id === e.mahfilId);
               return (
                 <div
@@ -517,7 +735,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                     <button
                       type="button"
                       onClick={() => onViewExpense(e)}
-                      className="min-h-[40px] px-3 text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                      className="min-h-[42px] px-3.5 text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 rounded-lg inline-flex items-center gap-1 cursor-pointer"
                     >
                       <Eye className="w-3.5 h-3.5" /> বিবরণ
                     </button>
@@ -525,7 +743,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                       <button
                         type="button"
                         onClick={() => onEditExpense(e)}
-                        className="min-h-[40px] px-3 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                        className="min-h-[42px] px-3.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
                       >
                         <Edit2 className="w-3.5 h-3.5" /> সম্পাদন
                       </button>
@@ -534,7 +752,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeleteExpense(e.id, e.title)}
-                        className="min-h-[40px] px-3 text-xs font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                        className="min-h-[42px] px-3.5 text-xs font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" /> মুছুন
                       </button>
@@ -561,7 +779,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
-                  {filteredExpenses.map((e) => {
+                  {pageExpenses.map((e) => {
                     const mahfil = mahfils.find((m) => m.id === e.mahfilId);
                     return (
                       <tr key={e.id} className="hover:bg-stone-50/70 transition-colors">
@@ -592,7 +810,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                               type="button"
                               onClick={() => onViewExpense(e)}
                               title="বিবরণ দেখুন"
-                              className="p-1.5 text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-md transition-colors cursor-pointer"
+                              className="p-2 text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-md transition-colors cursor-pointer"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
@@ -601,7 +819,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                                 type="button"
                                 onClick={() => onEditExpense(e)}
                                 title="সম্পাদনা করুন"
-                                className="p-1.5 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                className="p-2 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
                               >
                                 <Edit2 className="w-4 h-4" />
                               </button>
@@ -611,7 +829,7 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                                 type="button"
                                 onClick={() => onDeleteExpense(e.id, e.title)}
                                 title="মুছে ফেলুন"
-                                className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                className="p-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -625,7 +843,33 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
               </table>
             </div>
           </div>
+
+          {/* Pagination Controls */}
+          <PaginationControls
+            page={page}
+            pageSize={pageSize}
+            totalCount={totalCount}
+            onPageChange={(newPage) => {
+              setPage(newPage);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            isLoading={isLoading}
+          />
         </>
+      )}
+
+      {/* Admin Category Management Modal */}
+      {showCategoryModal && currentRole === 'admin' && onAddCategory && onUpdateCategory && onToggleCategoryActive && (
+        <ExpenseCategoryModal
+          isOpen={showCategoryModal}
+          onClose={() => setShowCategoryModal(false)}
+          currentRole={currentRole}
+          categories={categories || []}
+          expenses={expenses}
+          onAddCategory={onAddCategory}
+          onUpdateCategory={onUpdateCategory}
+          onToggleActive={onToggleCategoryActive}
+        />
       )}
     </div>
   );

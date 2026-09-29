@@ -1,5 +1,16 @@
 import React from 'react';
-import { UserRole, UserProfile, Member, Mahfil, Donation, Expense } from '../types/database.types';
+import {
+  UserRole,
+  UserProfile,
+  Member,
+  Mahfil,
+  Donation,
+  Expense,
+  ExpenseCategory,
+  PublicViewSettings,
+  DEFAULT_PUBLIC_VIEW_SETTINGS,
+  PublicSummary,
+} from '../types/database.types';
 import {
   Database,
   ShieldCheck,
@@ -11,6 +22,8 @@ import {
   Lock,
 } from 'lucide-react';
 import { StorageBackupManager } from '../components/settings/StorageBackupManager';
+import { ExpenseCategoryManager } from '../components/expenses/ExpenseCategoryManager';
+import { PublicViewThemeManager } from '../components/settings/PublicViewThemeManager';
 
 interface SettingsPageProps {
   currentRole: UserRole;
@@ -22,6 +35,14 @@ interface SettingsPageProps {
   donations: Donation[];
   expenses: Expense[];
   onRefreshData: () => Promise<void>;
+  categories?: ExpenseCategory[];
+  onAddCategory?: (name: string) => Promise<any>;
+  onUpdateCategory?: (id: string, name: string) => Promise<any>;
+  onToggleCategoryActive?: (id: string, isActive: boolean) => Promise<any>;
+  publicViewSettings?: PublicViewSettings;
+  isLoadingPublicViewSettings?: boolean;
+  onSavePublicViewSettings?: (settings: PublicViewSettings) => Promise<boolean>;
+  publicSummary?: PublicSummary | null;
 }
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({
@@ -34,6 +55,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   donations,
   expenses,
   onRefreshData,
+  categories = [],
+  onAddCategory,
+  onUpdateCategory,
+  onToggleCategoryActive,
+  publicViewSettings = DEFAULT_PUBLIC_VIEW_SETTINGS,
+  isLoadingPublicViewSettings = false,
+  onSavePublicViewSettings,
+  publicSummary,
 }) => {
   const roleLabels: Record<UserRole, { title: string; desc: string; badge: string }> = {
     admin: {
@@ -90,6 +119,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     },
     {
       action: 'হিসাব বা লেনদেন স্থায়ীভাবে মুছে ফেলা (Delete Permanently)',
+      allowed: currentRole === 'admin',
+    },
+    {
+      action: 'খরচের ক্যাটাগরি তৈরি, সম্পাদন ও নিয়ন্ত্রণ (Expense Categories)',
+      allowed: currentRole === 'admin',
+    },
+    {
+      action: 'পাবলিক ভিউ ডিজাইন ও থিম কনফিগারেশন (Public Theme)',
       allowed: currentRole === 'admin',
     },
   ];
@@ -154,6 +191,28 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           donations={donations}
           expenses={expenses}
           onRefreshData={onRefreshData}
+        />
+      )}
+
+      {/* Admin Only: Expense Category Management Section */}
+      {currentRole === 'admin' && onAddCategory && onUpdateCategory && onToggleCategoryActive && (
+        <ExpenseCategoryManager
+          currentRole={currentRole}
+          categories={categories || []}
+          expenses={expenses}
+          onAddCategory={onAddCategory}
+          onUpdateCategory={onUpdateCategory}
+          onToggleActive={onToggleCategoryActive}
+        />
+      )}
+
+      {/* Admin Only: Public View Design & Theme Manager */}
+      {currentRole === 'admin' && onSavePublicViewSettings && (
+        <PublicViewThemeManager
+          currentSettings={publicViewSettings}
+          isLoading={isLoadingPublicViewSettings}
+          onSave={onSavePublicViewSettings}
+          publicSummary={publicSummary}
         />
       )}
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { databaseService, computeDashboardStats } from '../services/databaseService';
-import { Donation, Expense, Mahfil, Member, DashboardStats } from '../types/database.types';
+import { Donation, Expense, ExpenseCategory, Mahfil, Member, DashboardStats } from '../types/database.types';
 
 interface UseFinancialDataOptions {
   isAuthLoading?: boolean;
@@ -13,6 +13,7 @@ export function useFinancialData(options?: UseFinancialDataOptions) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [mahfils, setMahfils] = useState<Mahfil[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -43,11 +44,15 @@ export function useFinancialData(options?: UseFinancialDataOptions) {
     setError(null);
     setDashboardStats(null);
     try {
-      const [dList, eList, mList, memList] = await Promise.all([
+      const [dList, eList, mList, memList, catList] = await Promise.all([
         databaseService.getDonations(),
         databaseService.getExpenses(),
         databaseService.getMahfils(),
         databaseService.getMembers(),
+        databaseService.getExpenseCategories().catch((e) => {
+          console.warn('Expense categories fetch warning:', e);
+          return [] as ExpenseCategory[];
+        }),
       ]);
 
       // Calculate totals immediately and directly from freshly returned database records
@@ -57,6 +62,7 @@ export function useFinancialData(options?: UseFinancialDataOptions) {
       setExpenses(eList);
       setMahfils(mList);
       setMembers(memList);
+      setExpenseCategories(catList);
       setDashboardStats(stats);
       setError(null);
     } catch (err: any) {
@@ -226,17 +232,80 @@ export function useFinancialData(options?: UseFinancialDataOptions) {
     }
   };
 
+  // Expense Category mutations (Admin only)
+  const refreshExpenseCategories = async () => {
+    try {
+      const list = await databaseService.getExpenseCategories();
+      setExpenseCategories(list);
+    } catch (err: any) {
+      console.warn('Could not refresh categories:', err);
+    }
+  };
+
+  const addExpenseCategory = async (name: string) => {
+    try {
+      const newCat = await databaseService.addExpenseCategory(name);
+      showNotification(`"${newCat.name}" ক্যাটাগরি সফলভাবে তৈরি হয়েছে।`);
+      await refreshAll();
+      return newCat;
+    } catch (err: any) {
+      showNotification(err?.message || 'ক্যাটাগরি তৈরি ব্যর্থ হয়েছে', 'error');
+      throw err;
+    }
+  };
+
+  const updateExpenseCategory = async (id: string, name: string) => {
+    try {
+      const updated = await databaseService.updateExpenseCategory(id, name);
+      showNotification(`ক্যাটাগরি হালনাগাদ সফল হয়েছে।`);
+      await refreshAll();
+      return updated;
+    } catch (err: any) {
+      showNotification(err?.message || 'ক্যাটাগরি হালনাগাদ ব্যর্থ হয়েছে', 'error');
+      throw err;
+    }
+  };
+
+  const toggleExpenseCategoryActive = async (id: string, isActive: boolean) => {
+    try {
+      const updated = await databaseService.setExpenseCategoryActive(id, isActive);
+      showNotification(
+        isActive
+          ? `"${updated.name}" ক্যাটাগরি সফলভাবে সক্রিয় করা হয়েছে।`
+          : `"${updated.name}" ক্যাটাগরি নিষ্ক্রিয় করা হয়েছে।`
+      );
+      await refreshAll();
+      return updated;
+    } catch (err: any) {
+      showNotification(err?.message || 'স্ট্যাটাস পরিবর্তন ব্যর্থ হয়েছে', 'error');
+      throw err;
+    }
+  };
+
+  const deleteExpenseCategory = async (id: string, name: string) => {
+    try {
+      await databaseService.deleteExpenseCategory(id, name);
+      showNotification(`"${name}" ক্যাটাগরি মুছে ফেলা হয়েছে।`);
+      await refreshAll();
+    } catch (err: any) {
+      showNotification(err?.message || 'ক্যাটাগরি মুছে ফেলা সম্ভব হয়নি', 'error');
+      throw err;
+    }
+  };
+
   return {
     donations,
     expenses,
     mahfils,
     members,
+    expenseCategories,
     dashboardStats,
     isLoading,
     error,
     notification,
     clearNotification,
     refreshAll,
+    refreshExpenseCategories,
     addDonation,
     updateDonation,
     deleteDonation,
@@ -249,6 +318,10 @@ export function useFinancialData(options?: UseFinancialDataOptions) {
     addMember,
     updateMember,
     deleteMember,
+    addExpenseCategory,
+    updateExpenseCategory,
+    toggleExpenseCategoryActive,
+    deleteExpenseCategory,
     isDatabaseConfigured: databaseService.isConfigured(),
   };
 }

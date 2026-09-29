@@ -18,6 +18,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { NavItemKey } from '../components/navigation/Sidebar';
+import { QuickEntrySection } from '../components/quickEntry/QuickEntrySection';
 
 interface DashboardPageProps {
   stats: DashboardStats | null;
@@ -29,6 +30,7 @@ interface DashboardPageProps {
   onAddExpense: () => void;
   onAddMahfil: () => void;
   onSelectMahfil: (mahfil: Mahfil) => void;
+  onQuickEntry?: (type: 'donation' | 'expense' | 'mahfil') => void;
   canEdit: boolean;
   isLoading?: boolean;
   error?: string | null;
@@ -45,12 +47,27 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   onAddExpense,
   onAddMahfil,
   onSelectMahfil,
+  onQuickEntry,
   canEdit,
   isLoading = false,
   error = null,
   onRetry,
 }) => {
   const hasRecords = donations.length > 0 || expenses.length > 0 || mahfils.length > 0;
+
+  // Relevant upcoming/recent Mahfils needed by the current Dashboard
+  const relevantMahfils = React.useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    return [...mahfils]
+      .sort((a, b) => {
+        const aUpcoming = (a.date || '') >= todayStr;
+        const bUpcoming = (b.date || '') >= todayStr;
+        if (aUpcoming && !bUpcoming) return -1;
+        if (!aUpcoming && bUpcoming) return 1;
+        return (b.date || '').localeCompare(a.date || '');
+      })
+      .slice(0, 4);
+  }, [mahfils]);
 
   return (
     <div className="space-y-6">
@@ -91,6 +108,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           )}
         </div>
       </div>
+
+      {/* Quick Entry Section for Admin and Cashier (3 large touch-friendly actions on mobile/desktop) */}
+      {canEdit && onQuickEntry && (
+        <QuickEntrySection
+          onQuickDonation={() => onQuickEntry('donation')}
+          onQuickExpense={() => onQuickEntry('expense')}
+          onQuickMahfil={() => onQuickEntry('mahfil')}
+          canEdit={canEdit}
+        />
+      )}
 
       {/* Loading State as required by prompt */}
       {isLoading ? (
@@ -239,7 +266,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     </p>
                   ) : (
                     <div className="divide-y divide-stone-100">
-                      {donations.slice(0, 5).map((d) => (
+                      {donations.slice(0, 10).map((d) => (
                         <div
                           key={d.id}
                           className="py-3 flex items-center justify-between text-xs sm:text-sm hover:bg-stone-50/60 rounded-lg px-2 transition-colors"
@@ -286,7 +313,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     </p>
                   ) : (
                     <div className="divide-y divide-stone-100">
-                      {expenses.slice(0, 5).map((e) => (
+                      {expenses.slice(0, 10).map((e) => (
                         <div
                           key={e.id}
                           className="py-3 flex items-center justify-between text-xs sm:text-sm hover:bg-stone-50/60 rounded-lg px-2 transition-colors"
@@ -347,7 +374,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {mahfils.slice(0, 4).map((m) => {
+                      {relevantMahfils.map((m) => {
                         const mDonations = donations
                           .filter((d) => d.mahfilId === m.id)
                           .reduce((sum, d) => sum + d.amount, 0);

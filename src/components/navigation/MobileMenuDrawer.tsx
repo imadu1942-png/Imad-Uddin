@@ -23,8 +23,13 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
     ? [
         {
           key: 'dashboard' as NavItemKey,
-          label: 'পাবলিক হিসাব',
+          label: 'আর্থিক বিবরণী',
           icon: <span className="w-5 h-5 flex items-center justify-center font-bold">আ</span>,
+        },
+        {
+          key: 'members' as NavItemKey,
+          label: 'সংগঠনের সদস্যবৃন্দ',
+          icon: <span className="w-5 h-5 flex items-center justify-center font-bold">স</span>,
         },
       ]
     : navItems;

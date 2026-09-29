@@ -8,6 +8,7 @@ interface HeaderProps {
   onAddExpense: () => void;
   onAddMahfil: () => void;
   onAddMember: () => void;
+  onQuickEntry?: (type: 'donation' | 'expense' | 'mahfil') => void;
   userRole: UserRole;
   currentUser: UserProfile | null;
   guestName?: string;
@@ -23,6 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
   onAddExpense,
   onAddMahfil,
   onAddMember,
+  onQuickEntry,
   userRole,
   currentUser,
   guestName,
@@ -132,7 +134,8 @@ export const Header: React.FC<HeaderProps> = ({
                       type="button"
                       onClick={() => {
                         setIsQuickOpen(false);
-                        onAddDonation();
+                        if (onQuickEntry) onQuickEntry('donation');
+                        else onAddDonation();
                       }}
                       className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs sm:text-sm text-stone-700 hover:bg-emerald-50 hover:text-emerald-900 transition-colors cursor-pointer text-left"
                     >
@@ -144,7 +147,8 @@ export const Header: React.FC<HeaderProps> = ({
                       type="button"
                       onClick={() => {
                         setIsQuickOpen(false);
-                        onAddExpense();
+                        if (onQuickEntry) onQuickEntry('expense');
+                        else onAddExpense();
                       }}
                       className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs sm:text-sm text-stone-700 hover:bg-rose-50 hover:text-rose-900 transition-colors cursor-pointer text-left"
                     >
@@ -158,7 +162,8 @@ export const Header: React.FC<HeaderProps> = ({
                       type="button"
                       onClick={() => {
                         setIsQuickOpen(false);
-                        onAddMahfil();
+                        if (onQuickEntry) onQuickEntry('mahfil');
+                        else onAddMahfil();
                       }}
                       className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs sm:text-sm text-stone-700 hover:bg-stone-100 transition-colors cursor-pointer text-left"
                     >

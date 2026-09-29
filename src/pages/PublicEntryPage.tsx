@@ -1,18 +1,25 @@
 import React, { useState } from 'react';
 import { ArrowRight, Shield } from 'lucide-react';
 import { IslamicDomeLogo } from '../components/common/IslamicDomeLogo';
+import { PublicViewSettings, DEFAULT_PUBLIC_VIEW_SETTINGS } from '../types/database.types';
+import { getThemeStyles } from '../utils/themeHelper';
 
 interface PublicEntryPageProps {
   onEnterAsGuest: (name: string) => void;
   onOpenAdminLogin: () => void;
+  settings?: PublicViewSettings;
 }
 
 export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
   onEnterAsGuest,
   onOpenAdminLogin,
+  settings = DEFAULT_PUBLIC_VIEW_SETTINGS,
 }) => {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
+
+  const currentSettings = settings || DEFAULT_PUBLIC_VIEW_SETTINGS;
+  const themeStyles = getThemeStyles(currentSettings);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,7 +29,7 @@ export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-950 via-stone-900 to-stone-950 flex flex-col justify-between items-center p-4 sm:p-6 selection:bg-emerald-500 selection:text-white">
+    <div className={`min-h-screen ${themeStyles.entryBgClass} flex flex-col justify-between items-center p-4 sm:p-6 selection:bg-emerald-500 selection:text-white transition-colors duration-300`}>
       {/* Top spacer */}
       <div className="w-full pt-4 sm:pt-8" />
 
@@ -31,22 +38,36 @@ export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
         {/* Brand Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-black border-2 border-emerald-500/40 p-1 mb-4 shadow-xl shadow-emerald-950/60 overflow-hidden">
-            <IslamicDomeLogo className="w-full h-full object-contain" />
+            {currentSettings.logoUrl ? (
+              <img
+                src={currentSettings.logoUrl}
+                alt={currentSettings.orgName}
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  // Fallback to dome logo if custom image fails to load
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
+            ) : (
+              <IslamicDomeLogo className="w-full h-full object-contain" />
+            )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-            আশেকানে গাউছিয়া
+            {currentSettings.orgName}
           </h1>
-          <p className="text-sm sm:text-base text-emerald-300/90 mt-1.5 font-medium">
-            হাদিয়া, মাহফিল ও আয়-ব্যয়ের হিসাব
-          </p>
+          {currentSettings.subtitle && (
+            <p className="text-sm sm:text-base text-emerald-300/90 mt-1.5 font-medium">
+              {currentSettings.subtitle}
+            </p>
+          )}
         </div>
 
         {/* Public Entry Card */}
-        <div className="bg-stone-900/90 backdrop-blur-md rounded-2xl border border-stone-700/60 shadow-2xl p-6 sm:p-8 text-stone-100">
+        <div className={`bg-stone-900/90 backdrop-blur-md rounded-2xl border ${themeStyles.entryCardBorderClass} shadow-2xl p-6 sm:p-8 text-stone-100`}>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="guest-name-input" className="block text-xs font-medium text-stone-300 mb-2">
-                স্বাগতম! আপনার পরিচয় দিন:
+                {currentSettings.welcomeMessage || 'স্বাগতম! আপনার পরিচয় দিন:'}
               </label>
               <input
                 id="guest-name-input"
@@ -68,7 +89,8 @@ export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
 
             <button
               type="submit"
-              className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white font-semibold text-sm sm:text-base rounded-xl transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-2 cursor-pointer"
+              style={{ backgroundColor: currentSettings.accentColor }}
+              className="w-full h-12 hover:opacity-90 active:scale-[0.99] text-white font-semibold text-sm sm:text-base rounded-xl transition-all shadow-lg shadow-black/40 flex items-center justify-center gap-2 cursor-pointer"
             >
               <span>প্রবেশ করুন</span>
               <ArrowRight className="w-4 h-4" />
@@ -91,7 +113,7 @@ export const PublicEntryPage: React.FC<PublicEntryPageProps> = ({
 
       {/* Footer */}
       <div className="text-center pb-4 text-xs text-stone-500">
-        © {new Date().getFullYear()} আশেকানে গাউছিয়া। সর্বস্বত্ব সংরক্ষিত।
+        {currentSettings.footerText || `© ${new Date().getFullYear()} ${currentSettings.orgName}। সর্বস্বত্ব সংরক্ষিত।`}
       </div>
     </div>
   );

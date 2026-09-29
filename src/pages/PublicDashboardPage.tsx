@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { PublicSummary } from '../types/database.types';
+import { databaseService } from '../services/databaseService';
+import { PublicSummary, PublicViewSettings, DEFAULT_PUBLIC_VIEW_SETTINGS } from '../types/database.types';
 import { StatCard } from '../components/common/StatCard';
+import { OrgMembersSection } from '../components/public/OrgMembersSection';
 import { formatCurrency, toBengaliNumber, formatBengaliDate } from '../utils/formatters';
+import { getThemeStyles } from '../utils/themeHelper';
+import { IslamicDomeLogo } from '../components/common/IslamicDomeLogo';
 import {
   Users,
   TrendingUp,
@@ -34,12 +38,39 @@ const BENGALI_MONTH_LABELS: Record<number, string> = {
 
 interface PublicDashboardPageProps {
   guestName?: string;
+  settings?: PublicViewSettings;
+  activeSection?: 'financial' | 'members';
+  onSectionChange?: (section: 'financial' | 'members') => void;
 }
 
-export const PublicDashboardPage: React.FC<PublicDashboardPageProps> = ({ guestName }) => {
+export const PublicDashboardPage: React.FC<PublicDashboardPageProps> = ({
+  guestName,
+  settings = DEFAULT_PUBLIC_VIEW_SETTINGS,
+  activeSection,
+  onSectionChange,
+}) => {
   const [data, setData] = useState<PublicSummary | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [internalSection, setInternalSection] = useState<'financial' | 'members'>(activeSection || 'financial');
+
+  useEffect(() => {
+    if (activeSection) {
+      setInternalSection(activeSection);
+    }
+  }, [activeSection]);
+
+  const currentSection = activeSection || internalSection;
+
+  const handleSwitchSection = (sec: 'financial' | 'members') => {
+    setInternalSection(sec);
+    if (onSectionChange) {
+      onSectionChange(sec);
+    }
+  };
+
+  const currentSettings = settings || DEFAULT_PUBLIC_VIEW_SETTINGS;
+  const themeStyles = getThemeStyles(currentSettings);
 
   const fetchPublicSummary = useCallback(async () => {
     setIsLoading(true);
@@ -49,20 +80,14 @@ export const PublicDashboardPage: React.FC<PublicDashboardPageProps> = ({ guestN
         throw new Error('ডাটাবেস সংযোগ কনফিগার করা হয়নি। অনুগ্রহ করে ইন্টারনেট ও পরিবেশ ভ্যারিয়েবল পরীক্ষা করুন।');
       }
 
-      // Explicitly invoke the Supabase RPC function for public summary
-      const { data: rpcData, error: rpcError } = await supabase.rpc('get_public_summary');
+      // Invoke getPublicSummary with RPC support and direct table aggregation fallback
+      const summary = await databaseService.getPublicSummary();
 
-      if (rpcError) {
-        console.error('Supabase get_public_summary RPC error:', rpcError);
-        const errDetails = rpcError.message || rpcError.details || 'সুপাবেস ডাটাবেস থেকে হিসাব সংগ্রহ করা সম্ভব হয়নি';
-        throw new Error(errDetails);
-      }
-
-      if (!rpcData) {
+      if (!summary) {
         throw new Error('ডাটাবেস থেকে কোনো তথ্য পাওয়া যায়নি।');
       }
 
-      setData(rpcData as PublicSummary);
+      setData(summary);
       setError(null);
     } catch (err: any) {
       console.error('Public data loading failure:', err);
@@ -80,26 +105,45 @@ export const PublicDashboardPage: React.FC<PublicDashboardPageProps> = ({ guestN
   return (
     <div className="space-y-6">
       {/* Top Banner */}
-      <div className="bg-gradient-to-r from-emerald-900 via-emerald-800 to-teal-900 rounded-2xl p-5 sm:p-6 text-white shadow-sm">
+      <div className={`rounded-2xl p-5 sm:p-6 text-white shadow-sm transition-all duration-300 ${themeStyles.headerContainerClass}`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-700/80 text-emerald-100 border border-emerald-500/30 mb-1.5">
-              <span>পাবলিক আর্থিক খতিয়ান</span>
+          <div className="flex items-start sm:items-center gap-3.5">
+            {/* Logo */}
+            <div className="w-14 h-14 rounded-2xl bg-black/40 border border-white/20 p-1 shrink-0 flex items-center justify-center overflow-hidden shadow-inner">
+              {currentSettings.logoUrl ? (
+                <img
+                  src={currentSettings.logoUrl}
+                  alt={currentSettings.orgName}
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              ) : (
+                <IslamicDomeLogo className="w-full h-full object-contain" />
+              )}
             </div>
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
-              {guestName ? `${guestName}, স্বাগতম!` : 'আশেকানে গাউছিয়া আর্থিক বিবরণী'}
-            </h2>
-            <p className="text-emerald-100/90 text-xs sm:text-sm mt-1 max-w-xl leading-relaxed">
-              সংগঠনের সকল দান, মাহফিল ফান্ড ও ব্যয়ের সামগ্রিক হিসাব ও স্বচ্ছ বিবরণী।
-            </p>
+
+            <div>
+              <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border mb-1.5 ${themeStyles.badgeClass}`}>
+                <span>পাবলিক আর্থিক খতিয়ান</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
+                {guestName ? `${guestName}, স্বাগতম!` : `${currentSettings.orgName} আর্থিক বিবরণী`}
+              </h2>
+              <p className="text-white/85 text-xs sm:text-sm mt-0.5 max-w-xl leading-relaxed">
+                {currentSettings.subtitle || `${currentSettings.orgName}-এর সকল দান, মাহফিল ফান্ড ও ব্যয়ের সামগ্রিক হিসাব ও স্বচ্ছ বিবরণী।`}
+              </p>
+            </div>
           </div>
 
-          <div className="shrink-0">
+          <div className="shrink-0 self-end sm:self-center">
             <button
               type="button"
               onClick={fetchPublicSummary}
               disabled={isLoading}
-              className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer border border-emerald-500/30"
+              style={{ backgroundColor: currentSettings.accentColor }}
+              className="inline-flex items-center gap-2 px-3.5 py-2 hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-xs transition-opacity cursor-pointer border border-white/20"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
               <span>হিসাব রিফ্রেশ</span>
@@ -108,8 +152,40 @@ export const PublicDashboardPage: React.FC<PublicDashboardPageProps> = ({ guestN
         </div>
       </div>
 
-      {/* Loading State: explicitly required to show "হিসাব লোড হচ্ছে..." and not show 0 initially */}
-      {isLoading ? (
+      {/* Public Navigation Tabs: Financial Accounts & Organizational Members */}
+      <div className="flex items-center gap-2 border-b border-stone-200 pb-2 overflow-x-auto no-scrollbar">
+        <button
+          type="button"
+          onClick={() => handleSwitchSection('financial')}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            currentSection === 'financial'
+              ? 'bg-stone-900 text-white shadow-xs'
+              : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 bg-white border border-stone-200'
+          }`}
+        >
+          <Wallet className="w-4 h-4 text-emerald-500" />
+          <span>আর্থিক বিবরণী ও খতিয়ান</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleSwitchSection('members')}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            currentSection === 'members'
+              ? 'bg-stone-900 text-white shadow-xs'
+              : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 bg-white border border-stone-200'
+          }`}
+        >
+          <Users className="w-4 h-4 text-teal-500" />
+          <span>সংগঠনের সদস্যবৃন্দ</span>
+        </button>
+      </div>
+
+      {/* Render Selected Public Section */}
+      {currentSection === 'members' ? (
+        <OrgMembersSection themeAccentColor={currentSettings.accentColor} />
+      ) : isLoading ? (
+        /* Loading State: explicitly required to show "হিসাব লোড হচ্ছে..." and not show 0 initially */
         <div className="bg-white rounded-2xl border border-stone-200/90 p-12 text-center shadow-xs flex flex-col items-center justify-center space-y-3 min-h-[340px]">
           <div className="w-10 h-10 border-3 border-emerald-700 border-t-transparent rounded-full animate-spin" />
           <h3 className="text-base font-bold text-stone-800">
@@ -426,6 +502,12 @@ export const PublicDashboardPage: React.FC<PublicDashboardPageProps> = ({ guestN
           </div>
         </div>
       ) : null}
+
+      {/* Public Footer */}
+      <div className="pt-6 pb-2 text-center text-xs text-stone-500 border-t border-stone-200">
+        <p>{currentSettings.footerText || `© ${new Date().getFullYear()} ${currentSettings.orgName}। সর্বস্বত্ব সংরক্ষিত।`}</p>
+        <p className="text-[11px] text-stone-400 mt-1">পাবলিক ভিউ • আর্থিক স্বচ্ছতা ও জবাবদিহিতা</p>
+      </div>
     </div>
   );
 };

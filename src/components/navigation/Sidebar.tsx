@@ -54,8 +54,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ? [
         {
           key: 'dashboard' as NavItemKey,
-          label: 'পাবলিক হিসাব',
+          label: 'আর্থিক বিবরণী',
           icon: <LayoutDashboard className="w-5 h-5" />,
+        },
+        {
+          key: 'members' as NavItemKey,
+          label: 'সংগঠনের সদস্যবৃন্দ',
+          icon: <Users className="w-5 h-5" />,
         },
       ]
     : navItems;

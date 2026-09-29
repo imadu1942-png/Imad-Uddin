@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useFinancialData } from './hooks/useFinancialData';
 import { useAuth } from './hooks/useAuth';
+import { usePublicViewSettings } from './hooks/usePublicViewSettings';
 import { Sidebar, NavItemKey } from './components/navigation/Sidebar';
 import { Header } from './components/navigation/Header';
 import { MobileBottomNav } from './components/navigation/MobileBottomNav';
@@ -16,6 +17,8 @@ import { ExpenseDetailModal } from './components/expenses/ExpenseDetailModal';
 import { MahfilFormModal } from './components/mahfil/MahfilFormModal';
 import { MahfilDetailModal } from './components/mahfil/MahfilDetailModal';
 import { MemberFormModal } from './components/members/MemberFormModal';
+import { QuickEntryModal, QuickEntryType } from './components/quickEntry/QuickEntryModal';
+import { Zap } from 'lucide-react';
 
 // Pages
 import { SplashScreen } from './components/common/SplashScreen';
@@ -49,6 +52,13 @@ export default function App() {
   });
   const [showAdminLogin, setShowAdminLogin] = useState<boolean>(false);
   const [isSplashComplete, setIsSplashComplete] = useState<boolean>(false);
+
+  // Public View Theme & Settings (In-memory state synced with Supabase, no permanent browser storage)
+  const {
+    settings: publicViewSettings,
+    isLoadingSettings: isLoadingPublicViewSettings,
+    updateSettings: updatePublicViewSettings,
+  } = usePublicViewSettings();
 
   // Authentication & Roles
   const {
@@ -93,6 +103,10 @@ export default function App() {
     addMember,
     updateMember,
     deleteMember,
+    expenseCategories,
+    addExpenseCategory,
+    updateExpenseCategory,
+    toggleExpenseCategoryActive,
     isDatabaseConfigured,
   } = useFinancialData({ isAuthLoading, userId: user?.id, isPublicGuest });
 
@@ -114,6 +128,14 @@ export default function App() {
   // Member Modals State
   const [isMemberFormOpen, setIsMemberFormOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
+
+  // Quick Entry Modal State (Admin / Cashier only)
+  const [quickEntryType, setQuickEntryType] = useState<QuickEntryType | null>(null);
+
+  const handleOpenQuickEntry = (type: QuickEntryType) => {
+    if (!canEdit) return;
+    setQuickEntryType(type);
+  };
 
   // Deletion Confirmation Dialog State
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
@@ -294,6 +316,7 @@ export default function App() {
       <PublicEntryPage
         onEnterAsGuest={handleEnterAsGuest}
         onOpenAdminLogin={() => setShowAdminLogin(true)}
+        settings={publicViewSettings}
       />
     );
   }
@@ -317,6 +340,7 @@ export default function App() {
           onAddExpense={handleOpenAddExpense}
           onAddMahfil={handleOpenAddMahfil}
           onAddMember={handleOpenAddMember}
+          onQuickEntry={handleOpenQuickEntry}
           userRole={effectiveRole}
           currentUser={user}
           guestName={guestName}
@@ -330,7 +354,12 @@ export default function App() {
         {/* Content Container */}
         <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
           {isPublicGuest ? (
-            <PublicDashboardPage guestName={guestName} />
+            <PublicDashboardPage
+              guestName={guestName}
+              settings={publicViewSettings}
+              activeSection={activeTab === 'members' ? 'members' : 'financial'}
+              onSectionChange={(section) => setActiveTab(section === 'members' ? 'members' : 'dashboard')}
+            />
           ) : isDataLoading ? (
             <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3">
               <div className="w-10 h-10 border-3 border-emerald-700 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -373,6 +402,7 @@ export default function App() {
                   onAddExpense={handleOpenAddExpense}
                   onAddMahfil={handleOpenAddMahfil}
                   onSelectMahfil={(m) => setViewingMahfil(m)}
+                  onQuickEntry={handleOpenQuickEntry}
                   canEdit={canEdit}
                   isLoading={isDataLoading}
                   error={dataError}
@@ -431,6 +461,11 @@ export default function App() {
                   canEdit={canEdit}
                   canDelete={canDelete}
                   isPublicGuest={isPublicGuest}
+                  currentRole={effectiveRole}
+                  categories={expenseCategories}
+                  onAddCategory={addExpenseCategory}
+                  onUpdateCategory={updateExpenseCategory}
+                  onToggleCategoryActive={toggleExpenseCategoryActive}
                 />
               )}
 
@@ -487,6 +522,13 @@ export default function App() {
                   donations={donations}
                   expenses={expenses}
                   onRefreshData={refreshAll}
+                  categories={expenseCategories}
+                  onAddCategory={addExpenseCategory}
+                  onUpdateCategory={updateExpenseCategory}
+                  onToggleCategoryActive={toggleExpenseCategoryActive}
+                  publicViewSettings={publicViewSettings}
+                  isLoadingPublicViewSettings={isLoadingPublicViewSettings}
+                  onSavePublicViewSettings={(newSettings) => updatePublicViewSettings(newSettings, user?.fullName)}
                 />
               )}
             </>
@@ -556,6 +598,7 @@ export default function App() {
             initialData={editingExpense}
             mahfils={mahfils}
             currentUserName={user?.fullName || 'ক্যাশিয়ার'}
+            categories={expenseCategories}
           />
 
           <MahfilFormModal
@@ -583,7 +626,39 @@ export default function App() {
             }}
             initialData={editingMember}
           />
+
+          <QuickEntryModal
+            isOpen={quickEntryType !== null}
+            initialType={quickEntryType || 'donation'}
+            onClose={() => setQuickEntryType(null)}
+            onSubmitDonation={async (data) => {
+              await addDonation(data);
+            }}
+            onSubmitExpense={async (data) => {
+              await addExpense(data);
+            }}
+            onSubmitMahfil={async (data) => {
+              await addMahfil(data);
+            }}
+            members={members}
+            mahfils={mahfils}
+            currentUserName={user?.fullName || 'ক্যাশিয়ার'}
+            categories={expenseCategories}
+          />
         </>
+      )}
+
+      {/* Mobile Floating Quick Entry Action (Admin & Cashier only) */}
+      {canEdit && !isPublicGuest && (
+        <button
+          type="button"
+          onClick={() => handleOpenQuickEntry('donation')}
+          aria-label="দ্রুত ভুক্তি"
+          className="lg:hidden fixed bottom-18 right-4 z-30 h-12 px-3.5 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-800 hover:to-emerald-900 active:scale-95 text-white rounded-full shadow-lg flex items-center gap-1.5 transition-all cursor-pointer border border-emerald-500/40"
+        >
+          <Zap className="w-4 h-4 fill-white text-white" />
+          <span className="text-xs font-bold tracking-tight">দ্রুত ভুক্তি</span>
+        </button>
       )}
 
       <DonationDetailModal
